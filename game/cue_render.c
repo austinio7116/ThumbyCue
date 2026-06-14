@@ -125,6 +125,26 @@ static void ribbon(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col) {
     }
 }
 
+/* A rail-top wood band [xa,xb]×[za,zb] with a real circular hole cut out at
+ * (hx,hz) radius hr — so the side-pocket void has NO wood inside it to peek
+ * through at the seams (the thin rail-edge line / shoulder wedges). */
+static void wood_band(float xa, float xb, float za, float zb,
+                      float hx, float hz, float hr, float y, uint16_t col) {
+    float lx = hx - hr, rx = hx + hr;
+    if (lx > xa) quad(v3(xa,y,za), v3(lx,y,za), v3(lx,y,zb), v3(xa,y,zb), col);
+    if (rx < xb) quad(v3(rx,y,za), v3(xb,y,za), v3(xb,y,zb), v3(rx,y,zb), col);
+    float x0 = lx > xa ? lx : xa, x1 = rx < xb ? rx : xb;
+    const int NS = 16; float r2 = hr * hr;
+    for (int i = 0; i < NS; i++) {
+        float sx0 = x0 + (x1-x0)*i/NS, sx1 = x0 + (x1-x0)*(i+1)/NS;
+        float dx = 0.5f*(sx0+sx1) - hx;
+        float h = (dx*dx < r2) ? sqrtf(r2 - dx*dx) : 0.0f;
+        float zlo = hz - h, zhi = hz + h;
+        if (zlo > za) quad(v3(sx0,y,za), v3(sx1,y,za), v3(sx1,y,zlo), v3(sx0,y,zlo), col);
+        if (zhi < zb) quad(v3(sx0,y,zhi), v3(sx1,y,zhi), v3(sx1,y,zb), v3(sx0,y,zb), col);
+    }
+}
+
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     s_ntab = 0;
     s_cloth = t->cloth;
@@ -217,8 +237,11 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     const float fw = rw + 0.030f;
     const float ox = hl + fw, oz = hw + fw;
     const float ibx = hl + cw, ibz = hw + cw;
-    quad(v3(-ox,rail_h,ibz), v3(ox,rail_h,ibz), v3(ox,rail_h,oz), v3(-ox,rail_h,oz), woodt);
-    quad(v3(-ox,rail_h,-oz), v3(ox,rail_h,-oz), v3(ox,rail_h,-ibz), v3(-ox,rail_h,-ibz), woodt);
+    /* Long rails carry the side pockets — cut a real hole for each so no wood
+     * shows inside the void (matches the void radius; the void stays small). */
+    const float scz = hw + t->off_side, shr = t->pr_side;
+    wood_band(-ox, ox, ibz, oz, 0.0f,  scz, shr, rail_h, woodt);
+    wood_band(-ox, ox, -oz, -ibz, 0.0f, -scz, shr, rail_h, woodt);
     quad(v3(-ox,rail_h,-ibz), v3(-ibx,rail_h,-ibz), v3(-ibx,rail_h,ibz), v3(-ox,rail_h,ibz), woodt);
     quad(v3(ibx,rail_h,-ibz), v3(ox,rail_h,-ibz), v3(ox,rail_h,ibz), v3(ibx,rail_h,ibz), woodt);
     quad(v3(-ox,rail_h,oz), v3(ox,rail_h,oz), v3(ox,0,oz), v3(-ox,0,oz), wood);
