@@ -223,11 +223,26 @@ Vec3 cue_table_cue_home(const CueTable *t) {
     return v3(t->baulk_x, t->R, -t->d_radius * 0.4f);
 }
 
+/* Per-rack RNG (render-only ball orientation; advances each ball + each rack so
+ * the balls don't all face the same way and racks differ between frames). */
+static uint32_t s_orient_rng = 0x2545F491u;
+static float orient_rand(void) {
+    s_orient_rng ^= s_orient_rng << 13; s_orient_rng ^= s_orient_rng >> 17; s_orient_rng ^= s_orient_rng << 5;
+    return (float)(s_orient_rng & 0xFFFFu) * (1.0f / 65536.0f);
+}
+static Mat3 rand_orient(void) {
+    Mat3 m = m3_identity();
+    m3_rotate_local(&m, 0, orient_rand() * 6.2831853f);
+    m3_rotate_local(&m, 1, orient_rand() * 6.2831853f);
+    m3_rotate_local(&m, 2, orient_rand() * 6.2831853f);
+    return m;
+}
+
 static void set_ball(CueBall *b, int id, float x, float z, float R) {
     b->pos = v3(x, R, z);
     b->vel = v3(0, 0, 0);
     b->w = v3(0, 0, 0);
-    b->orient = m3_identity();
+    b->orient = rand_orient();      /* random facing so the rack isn't uniform */
     b->on = 1;
     b->id = (uint8_t)id;
     b->pocket = 0;
