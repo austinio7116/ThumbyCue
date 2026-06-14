@@ -16,6 +16,7 @@ typedef struct { Vec3 v[3]; Vec3 nrm; uint16_t color; } CueTri;
 #define MAX_STRI      1300     /* near-clipping can split a tri into two */
 static CueTri   s_tab[MAX_TABLE_TRI];
 static int      s_ntab;
+static int      s_bed_ntab;   /* first s_bed_ntab tris are the flat cloth bed */
 static uint16_t s_cloth, s_bg_top, s_bg_bot;
 static uint16_t s_cloth_shadow;  /* dark cloth tint for ball shadow-side bounce */
 static float    s_ballR = 0.0286f;
@@ -24,13 +25,13 @@ static int      s_is_snooker;   /* ids 1..15 mean reds, not solids/stripes */
 /* ---- per-frame projected lists ---------------------------------------- */
 typedef struct { float x0,y0,x1,y1,x2,y2; uint16_t d0,d1,d2; uint16_t color; } STri;
 static STri s_stri[MAX_STRI]; static int s_nstri;
+static int s_bed_nstri;   /* s_stri[0..s_bed_nstri) are the flat cloth bed */
 
 typedef struct { float cx, cy, rad, viewz; Mat3 orient; uint8_t id; } Sprite;
 static Sprite s_spr[CUE_MAX_BALLS]; static int s_nspr;
 /* ground-plane shadow decal: centre + two screen-space axis vectors (the
  * projection of world +X and +Z offsets), so it foreshortens with the cloth */
-static struct { float cx, cy, ux, uy, vx, vy;
-                uint16_t d, dx, dz; } s_shadow[CUE_MAX_BALLS];
+static struct { float cx, cy, ux, uy, vx, vy; } s_shadow[CUE_MAX_BALLS];
 static int s_nshadow;
 
 #define MAX_DOTS 48
@@ -169,6 +170,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             tri(v3(0, 0, 0), a, b, t->cloth);
         }
     }
+    s_bed_ntab = s_ntab;   /* everything after here is raised (cushions/frame/voids) */
 
     /* Cushions from the chain segments: steep cloth playing face up to the
      * nose, then a cloth top sloping back to the cushion back. The facings
@@ -325,9 +327,11 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
     s_focal = 64.0f / tanf(v->fov_deg * (3.14159265f / 180.0f) * 0.5f);
 
     s_nstri = 0;
-    for (int i = 0; i < s_ntab; i++)
+    for (int i = 0; i < s_ntab; i++) {
+        if (i == s_bed_ntab) s_bed_nstri = s_nstri;   /* bed→raised boundary */
         add_stri(s_tab[i].v[0], s_tab[i].v[1], s_tab[i].v[2],
                  s_tab[i].nrm, s_tab[i].color);
+    }
 
     /* Balls → impostor sprites (+ shadow discs). */
     s_nspr = 0; s_nshadow = 0;
@@ -347,17 +351,15 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
          * (lamps are overhead → no side cast). Built as a ground-plane decal so
          * it foreshortens with the table and spreads toward the camera, staying
          * visible at the low aim-cam angle. */
-        float gcx, gcy, axx, axy, azx, azy; uint16_t shd, shdx, shdz;
+        float gcx, gcy, axx, axy, azx, azy; uint16_t shd;
         const float sr = s_ballR * 1.55f;      /* shadow radius in world metres */
         if (cue_render_project(v3(b->pos.x,      0.0f, b->pos.z),      &gcx, &gcy, &shd) &&
-            cue_render_project(v3(b->pos.x + sr, 0.0f, b->pos.z),      &axx, &axy, &shdx) &&
-            cue_render_project(v3(b->pos.x,      0.0f, b->pos.z + sr), &azx, &azy, &shdz)) {
+            cue_render_project(v3(b->pos.x + sr, 0.0f, b->pos.z),      &axx, &axy, NULL) &&
+            cue_render_project(v3(b->pos.x,      0.0f, b->pos.z + sr), &azx, &azy, NULL)) {
             if (s_nshadow < CUE_MAX_BALLS) {
                 s_shadow[s_nshadow].cx = gcx; s_shadow[s_nshadow].cy = gcy;
                 s_shadow[s_nshadow].ux = axx - gcx; s_shadow[s_nshadow].uy = axy - gcy;
                 s_shadow[s_nshadow].vx = azx - gcx; s_shadow[s_nshadow].vy = azy - gcy;
-                s_shadow[s_nshadow].d = shd;
-                s_shadow[s_nshadow].dx = shdx; s_shadow[s_nshadow].dz = shdz;
                 s_nshadow++;
             }
         }
@@ -476,11 +478,11 @@ static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
                 RGB565C(120,30,40) };
             return hue[id - 8];
         }
-        if (nb.x > 0.80f) return RGB565C(245, 245, 245);   /* number patch */
+        if (nb.x > 0.90f) return RGB565C(245, 245, 245);   /* number patch */
         return base;
     }
     if ((id >= 1 && id <= 8)) {                 /* solids + 8: white patch */
-        if (nb.x > 0.80f) return RGB565C(245, 245, 245);
+        if (nb.x > 0.90f) return RGB565C(245, 245, 245);
         return base;
     }
     return base;                                /* snooker plain colours */
@@ -595,8 +597,10 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
     }
     r3d_depth_clear(y0, y1);
 
-    /* table triangles */
-    for (int i = 0; i < s_nstri; i++) {
+    /* table triangles — BED first (flat cloth), so shadows can paint over it
+     * without the slate occluding them; the RAISED geometry (cushions, rails,
+     * pocket voids) is drawn after the shadows and depth-tests over them. */
+    for (int i = 0; i < s_bed_nstri; i++) {
         const STri *t = &s_stri[i];
         r3d_tri(t->x0, t->y0, t->d0, t->x1, t->y1, t->d1,
                 t->x2, t->y2, t->d2, t->color, y0, y1);
@@ -614,13 +618,6 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
         float det = ux * vy - uy * vx;
         if (det > -1e-4f && det < 1e-4f) continue;
         float inv = 1.0f / det;
-        /* depth of the decal varies linearly in (s,t) (1/z is linear across a
-         * plane in screen space): d = dc + s·(dx-dc) + t·(dz-dc). Comparing this
-         * per-pixel ground depth to the buffer lets a raised cushion/rail (much
-         * NEARER) occlude the shadow, while the coplanar cloth (equal depth)
-         * never self-culls. */
-        float dc = s_shadow[i].d;
-        float dds = (float)s_shadow[i].dx - dc, ddt = (float)s_shadow[i].dz - dc;
         int bx = (int)(fabsf(ux) + fabsf(vx)) + 1;   /* screen bounding box */
         int by = (int)(fabsf(uy) + fabsf(vy)) + 1;
         int x0 = (int)cx - bx, x1b = (int)cx + bx;
@@ -628,7 +625,6 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
         for (int py = yy0; py <= yy1; py++) {
             if (py < y0 || py >= y1 || py < 0 || py >= CUE_FB_H) continue;
             uint16_t *frow = fb + py * R3D_FB_W;
-            uint16_t *drow = depth + py * R3D_FB_W;
             float ry = py - cy;
             for (int px = x0; px <= x1b; px++) {
                 if (px < 0 || px >= CUE_FB_W) continue;
@@ -637,16 +633,21 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
                 float t = (-rx * uy + ry * ux) * inv;
                 float r2 = s * s + t * t;
                 if (r2 > 1.0f) continue;
-                /* occlude where geometry is meaningfully nearer than the ground
-                 * decal (cushions, rails, the wood frame); +24 lets the equal-
-                 * depth cloth and its small gradient through. */
-                float dpix = dc + s * dds + t * ddt;
-                if ((float)drow[px] > dpix + 24.0f) continue;
-                /* soft penumbra: darkest (×0.5) at centre, fading to none at rim. */
+                /* No depth test: shadows are drawn AFTER the cloth bed but
+                 * BEFORE the raised geometry, so the slate never occludes them
+                 * while cushions/rails (drawn next, depth-tested) paint over. */
                 float k = 0.5f + 0.5f * r2 * r2;
                 frow[px] = shade565(frow[px], k);
             }
         }
+    }
+
+    /* raised table geometry (cushions, rail frame, pocket voids) — depth-tested
+     * over the shadows so a cushion/rail correctly hides a shadow behind it. */
+    for (int i = s_bed_nstri; i < s_nstri; i++) {
+        const STri *t = &s_stri[i];
+        r3d_tri(t->x0, t->y0, t->d0, t->x1, t->y1, t->d1,
+                t->x2, t->y2, t->d2, t->color, y0, y1);
     }
 
     /* aim dots (cue path, pale yellow) + object-ball path (cyan) */

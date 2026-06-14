@@ -47,7 +47,8 @@ static int   s_screen = SC_TITLE;
 static int   s_state;             /* in-game sub-state */
 static float s_aim, s_view_az, s_aim_hold;
 static int   s_aim_dir;
-static float s_cam_zoom = 0.55f;   /* 0 = wide/far/low … 1 = close/tight/high */
+static float s_cam_pitch  = 0.45f; /* 0 = low/level … 1 = high/steep */
+static float s_cam_dist_z = 0.50f; /* 0 = far/wide … 1 = close/zoomed-in */
 static int   s_overhead;
 static float s_power, s_tip_side, s_tip_vert;
 static CraftRawButtons s_prev;
@@ -148,11 +149,17 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
             s_state = GS_AIM;
             return;
         }
-        /* ball-in-hand: move the cue ball along the baulk line / freely a bit */
-        if (b->left)  s_balls[0].pos.x -= 0.4f*dt;
-        if (b->right) s_balls[0].pos.x += 0.4f*dt;
-        if (b->up)    s_balls[0].pos.z -= 0.4f*dt;
-        if (b->down)  s_balls[0].pos.z += 0.4f*dt;
+        /* ball-in-hand: move the cue ball relative to the CAMERA view (UP =
+         * away into the screen, RIGHT = screen-right), not world axes — else the
+         * d-pad feels mixed up whenever the camera has rotated. */
+        float az = s_view_az;
+        float fx = cosf(az), fz = sinf(az);     /* camera forward (into screen) */
+        float rx = sinf(az), rz = -cosf(az);    /* camera right */
+        float mf = (b->up ? 1.0f : 0.0f) - (b->down ? 1.0f : 0.0f);
+        float mr = (b->right ? 1.0f : 0.0f) - (b->left ? 1.0f : 0.0f);
+        float sp = 0.4f * dt;
+        s_balls[0].pos.x += (fx*mf + rx*mr) * sp;
+        s_balls[0].pos.z += (fz*mf + rz*mr) * sp;
         float lim = s_table.half_wid - s_table.R;
         if (s_balls[0].pos.z >  lim) s_balls[0].pos.z =  lim;
         if (s_balls[0].pos.z < -lim) s_balls[0].pos.z = -lim;
@@ -182,11 +189,16 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
                 if (b->down) s_power += 0.85f*dt;
                 if (b->up)   s_power -= 0.85f*dt;
                 if (s_power<0) s_power=0; if (s_power>1) s_power=1;
-            } else {                          /* UP/DOWN = zoom (dolly closer) */
-                if (b->up)   s_cam_zoom += 0.6f*dt;
-                if (b->down) s_cam_zoom -= 0.6f*dt;
-                if (s_cam_zoom<0.0f) s_cam_zoom=0.0f;
-                if (s_cam_zoom>1.0f) s_cam_zoom=1.0f;
+            } else if (b->rb) {               /* hold RB + UP/DOWN = zoom (at current pitch) */
+                if (b->up)   s_cam_dist_z += 0.6f*dt;
+                if (b->down) s_cam_dist_z -= 0.6f*dt;
+                if (s_cam_dist_z<0.0f) s_cam_dist_z=0.0f;
+                if (s_cam_dist_z>1.0f) s_cam_dist_z=1.0f;
+            } else {                          /* UP/DOWN = camera pitch */
+                if (b->up)   s_cam_pitch += 0.5f*dt;
+                if (b->down) s_cam_pitch -= 0.5f*dt;
+                if (s_cam_pitch<0.0f) s_cam_pitch=0.0f;
+                if (s_cam_pitch>1.0f) s_cam_pitch=1.0f;
             }
         }
         s_view_az = s_aim;
@@ -210,10 +222,15 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
         if (!b->b) {       /* free-orbit camera to watch */
             if (b->left)  s_view_az += 1.1f*dt;
             if (b->right) s_view_az -= 1.1f*dt;
-            if (b->up)    s_cam_zoom += 0.6f*dt;
-            if (b->down)  s_cam_zoom -= 0.6f*dt;
-            if (s_cam_zoom<0.0f) s_cam_zoom=0.0f;
-            if (s_cam_zoom>1.0f) s_cam_zoom=1.0f;
+            if (b->rb) {                       /* RB + UP/DOWN = zoom */
+                if (b->up)   s_cam_dist_z += 0.6f*dt;
+                if (b->down) s_cam_dist_z -= 0.6f*dt;
+            } else {                           /* UP/DOWN = pitch */
+                if (b->up)   s_cam_pitch += 0.5f*dt;
+                if (b->down) s_cam_pitch -= 0.5f*dt;
+            }
+            if (s_cam_dist_z<0.0f) s_cam_dist_z=0.0f; if (s_cam_dist_z>1.0f) s_cam_dist_z=1.0f;
+            if (s_cam_pitch<0.0f)  s_cam_pitch=0.0f;  if (s_cam_pitch>1.0f)  s_cam_pitch=1.0f;
         }
         /* loudness of impacts tracks the fastest ball this step → a hard clack
          * is loud, a gentle kiss soft, a slow ball trickling in pots softly. */
@@ -363,12 +380,10 @@ static void build_view(CueView *v) {
         float H=focal*(ext+0.12f)/58.0f; if(H<ext*1.6f) H=ext*1.6f;
         v->pos=v3(0,H,0); v->basis.r[0]=v3(1,0,0); v->basis.r[1]=v3(0,0,1); v->basis.r[2]=v3(0,-1,0);
     } else {
-        /* zoom dolly: closer in pulls the camera toward the cue ball AND lifts
-         * it for a steeper angle (so balls read big and grounded shadows show);
-         * zoomed out backs off low and wide. */
-        float z = s_cam_zoom;
-        float dist = 0.82f - 0.50f*z;          /* 0.82 m (far) … 0.32 m (close) */
-        float elev = 0.18f + 0.40f*z;          /* 0.18 m (low) … 0.58 m (high)  */
+        /* pitch and zoom are independent: UP/DOWN tilts (elevation), RB+UP/DOWN
+         * dollies in/out at the current pitch. */
+        float dist = 0.82f - 0.52f*s_cam_dist_z;   /* 0.82 m (far) … 0.30 m (close) */
+        float elev = 0.12f + 0.52f*s_cam_pitch;    /* 0.12 m (low) … 0.64 m (high)  */
         Vec3 cam=v3(P.x-dir.x*dist, s_table.R+elev, P.z-dir.z*dist);
         Vec3 target=v3(P.x+dir.x*0.20f, s_table.R, P.z+dir.z*0.20f);
         Vec3 fwd=v3_norm(v3_sub(target,cam));
