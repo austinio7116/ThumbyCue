@@ -237,19 +237,6 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         float cx = w->pocket[p].x, cz = w->pocket[p].z;
         float r = (p < 4) ? t->pr_corner : t->pr_side;
         Vec3 cap_c = v3(cx, cap_y, cz), floor_c = v3(cx, floor_y, cz);
-        /* Distance to the nearest cushion knuckle — how far the rail mouth opens
-         * past the round void. Used (side pockets only) to cap the wood wedge
-         * between the small, unchanged round void and the cushion ends. */
-        float rmouth = r;
-        if (p >= 4) {
-            float best = 1e9f;
-            for (int j = 0; j < w->njaw; j++) {
-                float dx = w->jaw[j].x - cx, dz = w->jaw[j].z - cz;
-                float d = sqrtf(dx*dx + dz*dz);
-                if (d > r && d < best) best = d;
-            }
-            if (best < 1e8f) rmouth = best;
-        }
         const int N = 20;
         /* Align the cone segments to the pocket's outward diagonal so its
          * coverage is symmetric about that axis — otherwise it bites the two
@@ -271,15 +258,6 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                 Vec3 top1 = v3(cx + r*c1, cap_y, cz + r*s1);
                 tri(cap_c, top0, top1, pk_wall);             /* punch frame (flush) */
                 quad(top0, top1, bed1, bed0, pk_wall);       /* frame-thickness wall */
-                /* extend a flat dark ring out to the cushion knuckles so the
-                 * little wood wedge between the round void and the cushion ends
-                 * (most visible at the side pockets) is covered — the round
-                 * recessed back stays the same small radius. */
-                if (rmouth > r + 1e-4f) {
-                    Vec3 m0 = v3(cx + rmouth*c0, cap_y, cz + rmouth*s0);
-                    Vec3 m1 = v3(cx + rmouth*c1, cap_y, cz + rmouth*s1);
-                    quad(top0, top1, m1, m0, pk_wall);
-                }
             }
         }
     }
