@@ -338,10 +338,11 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             float a0 = base + k * (6.2831853f / N), a1 = base + (k + 1) * (6.2831853f / N);
             float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
             float mx = cx + r * cosf(0.5f*(a0+a1)), mz = cz + r * sinf(0.5f*(a0+a1));
-            /* Cap exactly where the wood frame actually is (the rail ring,
-             * outside the cushion-back rectangle) — flush, no floating cap over
-             * the playing side and no uncapped frame sliver. */
-            int over_frame = (fabsf(mx) > ibx || fabsf(mz) > ibz);
+            /* Cap where the wood frame is (outside the cushion-back rectangle).
+             * Corner pockets extend the cut a few degrees further toward the
+             * cushions to swallow the little wood wedges at the jaw sides. */
+            float cm = (p < 4) ? 0.9f * t->R : 0.0f;
+            int over_frame = (fabsf(mx) > ibx - cm || fabsf(mz) > ibz - cm);
             Vec3 bed0 = v3(cx + r*c0, -0.002f, cz + r*s0);
             Vec3 bed1 = v3(cx + r*c1, -0.002f, cz + r*s1);
             if (s_is_snooker) {                              /* two-tone net pouch */

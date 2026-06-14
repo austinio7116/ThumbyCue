@@ -38,11 +38,12 @@ static int colour_id_for_value(int v) {
 void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
     memset(r, 0, sizeof(*r));
     r->kind = t->is_snooker;
+    r->mode = t->kind;
     r->cpu = cpu;
     r->turn = 0; r->winner = -1; r->open = 1; r->break_shot = 1;
     r->shots_remaining = 1; r->two_shot = 0; r->free_shot = 0;
     if (r->kind) {
-        r->target = 0; r->reds_left = 15;
+        r->target = 0; r->reds_left = t->reds ? t->reds : 15;
         /* colour spots by value 2..7 */
         r->spot[2] = v3(t->baulk_x, t->R, +t->d_radius);   /* yellow */
         r->spot[3] = v3(t->baulk_x, t->R, -t->d_radius);   /* green  */
@@ -124,12 +125,19 @@ static void resolve_pool(CueRules *r, CueBall *b, int n, int first_hit,
     }
 
     if (foul) {
-        /* UK two-shot rule: opponent gets two visits; the cue ball stays put
-         * unless it was potted (scratch → ball in hand behind the line). */
-        r->turn = 1 - r->turn;
-        r->two_shot = 1; r->shots_remaining = 2; r->free_shot = 1;
-        r->ball_in_hand = scratch ? 1 : 0;
-        snprintf(r->msg, sizeof r->msg, "FOUL: %s", why);   /* HUD shows 2 SHOTS */
+        if (r->mode == CUE_GAME_US8) {
+            /* US 8-ball: any foul → opponent gets ball-in-hand anywhere. */
+            r->turn = 1 - r->turn; r->ball_in_hand = 1;
+            r->two_shot = 0; r->shots_remaining = 1; r->free_shot = 0;
+            snprintf(r->msg, sizeof r->msg, "FOUL: %s", why);
+        } else {
+            /* UK two-shot rule: opponent gets two visits; the cue ball stays put
+             * unless it was potted (scratch → ball in hand behind the line). */
+            r->turn = 1 - r->turn;
+            r->two_shot = 1; r->shots_remaining = 2; r->free_shot = 1;
+            r->ball_in_hand = scratch ? 1 : 0;
+            snprintf(r->msg, sizeof r->msg, "FOUL: %s", why);   /* HUD shows 2 SHOTS */
+        }
     } else if (legal_pot) {
         /* potting your own ball cancels any two-shot advantage carried in */
         r->two_shot = 0; r->shots_remaining = 1; r->free_shot = 0;

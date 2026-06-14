@@ -9,7 +9,9 @@
 #include "cue_table.h"
 
 typedef struct {
-    int kind;            /* 0 = 8-ball, 1 = snooker */
+    int kind;            /* 0 = pool (8/9-ball), 1 = snooker */
+    int mode;            /* CueGameKind: UK8/US8/US9/SNK10/SNK15 */
+    int cfoul[2];        /* 9-ball: consecutive fouls per player */
     int cpu;             /* player 1 (index 1) is the CPU */
     int turn;            /* 0 or 1 — whose shot */
     int score[2];        /* snooker points */
