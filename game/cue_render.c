@@ -176,7 +176,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         /* Per-NODE back normal: average with the neighbouring segment when they
          * share an endpoint, so adjacent cushion tops share their back vertices
          * — a continuous strip with no V-gaps (the "holes in the top"). */
-        Vec3 na = sg->n, nb = sg->n;
+        Vec3 pa = sg->a, pb = sg->b, na = sg->n, nb = sg->n;
         int sharedA = 0, sharedB = 0;
         if (s > 0) {
             const CueSeg *pr = &w->seg[s-1];
@@ -186,27 +186,17 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             const CueSeg *nx = &w->seg[s+1];
             if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) { nb = v3_norm(v3_add(sg->n, nx->n)); sharedB = 1; }
         }
-        /* na/nb are the cushion's inward normals (toward play); the back edge is
-         * node − n·cw, i.e. perpendicular away from the playing surface toward
-         * the rail — correct everywhere including corners. (No radial guard: at
-         * a corner "away from centre" points into the pocket and flapped the top.) */
-        /* At an OPEN chain-end tip (a facing tip in the pocket throat) the back
-         * offset points outward = INTO the void, which made a green nub. Zero
-         * the offset there so the cushion ends with a clean vertical face. */
         float uba = sharedA ? ub : 0.0f, ubb = sharedB ? ub : 0.0f;
         float cwa = sharedA ? cw : 0.0f, cwb = sharedB ? cw : 0.0f;
-        Vec3 ba = v3(sg->a.x - na.x*uba, 0, sg->a.z - na.z*uba);
-        Vec3 bb = v3(sg->b.x - nb.x*ubb, 0, sg->b.z - nb.z*ubb);
-        Vec3 an = v3(sg->a.x, nose_h, sg->a.z), bn = v3(sg->b.x, nose_h, sg->b.z);
-        Vec3 af = v3(sg->a.x, flat_h, sg->a.z), bf = v3(sg->b.x, flat_h, sg->b.z);
-        Vec3 ar = v3(sg->a.x - na.x*cwa, rail_h, sg->a.z - na.z*cwa);
-        Vec3 br = v3(sg->b.x - nb.x*cwb, rail_h, sg->b.z - nb.z*cwb);
-        /* Choose the ribbon diagonal by which end is the tip so both jaws
-         * (opposite winding) render identically. alt when 'a' is the tip. */
-        int alt = !sharedA;
-        ribbon(ba, bb, bn, an, fdark, alt);    /* undercut face (leans to nose) */
+        Vec3 ba = v3(pa.x - na.x*uba, 0, pa.z - na.z*uba);
+        Vec3 bb = v3(pb.x - nb.x*ubb, 0, pb.z - nb.z*ubb);
+        Vec3 an = v3(pa.x, nose_h, pa.z), bn = v3(pb.x, nose_h, pb.z);
+        Vec3 af = v3(pa.x, flat_h, pa.z), bf = v3(pb.x, flat_h, pb.z);
+        Vec3 ar = v3(pa.x - na.x*cwa, rail_h, pa.z - na.z*cwa);
+        Vec3 br = v3(pb.x - nb.x*cwb, rail_h, pb.z - nb.z*cwb);
+        ribbon(ba, bb, bn, an, fdark, 0);      /* undercut face (leans to nose) */
         quad(an, bn, bf, af, face);            /* small flat (planar) */
-        ribbon(af, bf, br, ar, ctop, alt);     /* cloth top → rail */
+        ribbon(af, bf, br, ar, ctop, 0);       /* cloth top → rail */
     }
 
     /* Wood rail frame: full rectangular ring (the pocket caps punch holes
@@ -235,8 +225,12 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         float r = (p < 4) ? t->pr_corner : t->pr_side;
         Vec3 cap_c = v3(cx, cap_y, cz), floor_c = v3(cx, floor_y, cz);
         const int N = 20;
+        /* Align the cone segments to the pocket's outward diagonal so its
+         * coverage is symmetric about that axis — otherwise it bites the two
+         * jaws unequally (one looked smooth, the other kept a spike). */
+        float base = atan2f(cz, cx);
         for (int k = 0; k < N; k++) {
-            float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
+            float a0 = base + k * (6.2831853f / N), a1 = base + (k + 1) * (6.2831853f / N);
             float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
             float mx = cx + r * cosf(0.5f*(a0+a1)), mz = cz + r * sinf(0.5f*(a0+a1));
             /* Cap exactly where the wood frame actually is (the rail ring,
@@ -584,25 +578,22 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
                 t->x2, t->y2, t->d2, t->color, y0, y1);
     }
 
-    /* soft contact shadows: a flattened elliptical pool under the ball that
-     * darkens the cloth most at the centre and fades smoothly to nothing at the
-     * rim (overhead diffuse lamps → soft penumbra, no hard edge). */
+    /* soft shadows (dark, depth-tested at cloth) */
     for (int i = 0; i < s_nshadow; i++) {
         int rad = (int)s_shadow[i].rad;
         int cx = (int)s_shadow[i].cx, cy = (int)s_shadow[i].cy;
-        float vh = 0.55f * rad + 0.01f;        /* vertical half (flattened) */
-        for (int py = cy - (int)vh - 1; py <= cy + (int)vh + 1; py++) {
+        uint16_t d = s_shadow[i].d;
+        for (int py = cy - rad / 2; py <= cy + rad / 2; py++) {
             if (py < y0 || py >= y1 || py < 0 || py >= CUE_FB_H) continue;
-            float vv = (py - cy) / vh;
+            float vv = (py - cy) / (0.55f * rad + 0.01f);
             uint16_t *frow = fb + py * R3D_FB_W;
+            uint16_t *drow = depth + py * R3D_FB_W;
             for (int px = cx - rad; px <= cx + rad; px++) {
                 if (px < 0 || px >= CUE_FB_W) continue;
                 float uu = (px - cx) / (float)(rad + 0.01f);
-                float rr = uu * uu + vv * vv;
-                if (rr >= 1.0f) continue;
-                /* darkest (×0.5) at centre, no change (×1) at the rim */
-                float f = 0.5f + 0.5f * rr * rr;
-                frow[px] = shade565(frow[px], f);
+                if (uu * uu + vv * vv > 1.0f) continue;
+                if (d < drow[px]) continue;        /* behind table */
+                frow[px] = shade565(frow[px], 0.55f);
             }
         }
     }
