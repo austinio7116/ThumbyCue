@@ -212,7 +212,9 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                 for (int s = 1; s <= M; s++) {
                     float phi = (float)s / M * 1.5707963f;
                     float off = lw * sinf(phi), yy = -ld * (1.0f - cosf(phi));
-                    uint16_t col = shade565(t->cloth, 1.0f - 0.5f*(1.0f - cosf(phi)));
+                    /* fade to near-black as it rolls down so the lip sinks into
+                     * the void instead of showing bright-green flecks at depth */
+                    uint16_t col = shade565(t->cloth, 1.0f - 0.92f*(1.0f - cosf(phi)));
                     Vec3 ring1[N + 1];
                     for (int k = 0; k <= N; k++) {
                         /* roll the cloth toward the pocket centre (same drop for
