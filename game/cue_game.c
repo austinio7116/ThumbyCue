@@ -175,7 +175,7 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
             if (adir && adir == s_aim_dir) s_aim_hold += dt;
             else s_aim_hold = adir ? dt : 0;
             s_aim_dir = adir;
-            float rate = b->rb ? 0.09f
+            float rate = b->rb ? 0.022f      /* RB = ultra-fine aim (~1.3°/s) */
                        : (0.16f + 1.14f * (s_aim_hold>0.7f?1.0f:(s_aim_hold/0.7f)*(s_aim_hold/0.7f)));
             s_aim += adir * rate * dt;
             if (s_state == GS_BACKSWING) {
