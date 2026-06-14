@@ -58,7 +58,9 @@ static float s_aim, s_view_az, s_aim_hold;
 static int   s_aim_dir;
 static float s_cam_pitch  = 0.45f; /* 0 = low/level … 1 = high/steep */
 static float s_cam_dist_z = 0.50f; /* 0 = far/wide … 1 = close/zoomed-in */
-static int   s_overhead;
+static int   s_freelook;          /* aim-time: roam the table, no aiming (LB) */
+static float s_fl_az, s_fl_el = 0.55f, s_fl_dist = 0.5f;  /* free-look orbit */
+static Vec3  s_look;              /* free-look look-at centre (pan) */
 static Vec3  s_orbit_c;            /* frozen camera-orbit centre (freeview) */
 static int   s_freeview;          /* shot cam: 0 = follow cue ball, 1 = free-roam */
 static float s_power, s_tip_side, s_tip_vert;
@@ -90,7 +92,7 @@ static void new_frame(void) {
     cue_rules_init(&s_rules, &s_table, s_cpu);
     s_state = GS_AIM;
     s_aim = 0; s_view_az = 0; s_power = 0; s_tip_side = s_tip_vert = 0;
-    s_overhead = 0;
+    s_freelook = 0;
 }
 static Vec3 cue_pos(void) {
     return s_balls[0].on ? s_balls[0].pos : cue_table_cue_home(&s_table);
@@ -156,9 +158,41 @@ static void cpu_plan(void) {
 static void ingame_tick(const CraftRawButtons *b, float dt) {
     int jr_a = !b->a && s_prev.a;
     int adir = (b->left && !b->right) ? +1 : (b->right && !b->left) ? -1 : 0;
-    if (jp(b->lb, s_prev.lb)) s_overhead ^= 1;
-
     int cpu_turn = (s_cpu && s_rules.turn == 1);
+
+    /* FREE-LOOK (LB while aiming): roam the table — orbit/pitch/zoom + pan (hold
+     * B) — purely to inspect. No aiming. A or LB returns to the down-the-cue view. */
+    if ((s_state == GS_AIM || s_state == GS_BACKSWING) && !cpu_turn) {
+        if (!s_freelook && jp(b->lb, s_prev.lb)) {
+            s_freelook = 1; s_fl_az = s_view_az; s_look = v3(0, s_table.R, 0);
+        }
+        if (s_freelook) {
+            if (jp(b->a, s_prev.a) || jp(b->lb, s_prev.lb)) { s_freelook = 0; return; }
+            if (b->b) {                                  /* pan the look-at point */
+                float rx = sinf(s_fl_az), rz = -cosf(s_fl_az);
+                float fx = cosf(s_fl_az), fz = sinf(s_fl_az);
+                float sp = 0.5f * dt;
+                if (b->right) { s_look.x += rx*sp; s_look.z += rz*sp; }
+                if (b->left)  { s_look.x -= rx*sp; s_look.z -= rz*sp; }
+                if (b->up)    { s_look.x += fx*sp; s_look.z += fz*sp; }
+                if (b->down)  { s_look.x -= fx*sp; s_look.z -= fz*sp; }
+                float lx = s_table.half_len, lz = s_table.half_wid;
+                if (s_look.x> lx) s_look.x= lx; if (s_look.x<-lx) s_look.x=-lx;
+                if (s_look.z> lz) s_look.z= lz; if (s_look.z<-lz) s_look.z=-lz;
+            } else if (b->rb) {                          /* zoom */
+                if (b->up)   s_fl_dist += 0.6f*dt;
+                if (b->down) s_fl_dist -= 0.6f*dt;
+                if (s_fl_dist<0) s_fl_dist=0; if (s_fl_dist>1) s_fl_dist=1;
+            } else {                                     /* orbit + pitch (to overhead) */
+                if (b->left)  s_fl_az += 1.2f*dt;
+                if (b->right) s_fl_az -= 1.2f*dt;
+                if (b->up)    s_fl_el += 0.6f*dt;
+                if (b->down)  s_fl_el -= 0.6f*dt;
+                if (s_fl_el<0) s_fl_el=0; if (s_fl_el>1) s_fl_el=1;
+            }
+            return;                                      /* no aiming while looking */
+        }
+    }
 
     if (s_state == GS_PLACE) {
         if (cpu_turn) {            /* CPU places its own ball (home spot) and shoots */
@@ -397,11 +431,20 @@ static void build_view(CueView *v) {
      * where it orbits the frozen point and the player roams with the controls. */
     Vec3 P = (s_state == GS_SHOOTING && s_freeview) ? s_orbit_c : cue_pos();
     Vec3 dir = v3(cosf(s_view_az),0,sinf(s_view_az));
-    if (s_overhead) {
-        float focal=64.0f/tanf(v->fov_deg*DEG2RAD*0.5f);
-        float ext=(s_table.half_len>s_table.half_wid)?s_table.half_len:s_table.half_wid;
-        float H=focal*(ext+0.12f)/58.0f; if(H<ext*1.6f) H=ext*1.6f;
-        v->pos=v3(0,H,0); v->basis.r[0]=v3(1,0,0); v->basis.r[1]=v3(0,0,1); v->basis.r[2]=v3(0,-1,0);
+    if (s_freelook) {
+        /* orbit the look-at point; pitch from a low angle up to near-overhead;
+         * zoom scales with table size so it frames any table. */
+        float ext = (s_table.half_len>s_table.half_wid)?s_table.half_len:s_table.half_wid;
+        float ang = (0.12f + 0.82f*s_fl_el) * 1.5707963f;   /* ~11° … ~85° elevation */
+        float dist = ext * (2.4f - 1.7f*s_fl_dist);          /* far … close */
+        float ch = cosf(ang), sh = sinf(ang);
+        Vec3 cam = v3(s_look.x - cosf(s_fl_az)*dist*ch, s_look.y + dist*sh,
+                      s_look.z - sinf(s_fl_az)*dist*ch);
+        Vec3 fwd=v3_norm(v3_sub(s_look,cam));
+        Vec3 r=v3_cross(v3(0,1,0),fwd);
+        if (v3_len2(r) < 1e-5f) r = v3(1,0,0);               /* near-vertical guard */
+        Vec3 right=v3_norm(r); Vec3 up=v3_cross(fwd,right);
+        v->pos=cam; v->basis.r[0]=right; v->basis.r[1]=up; v->basis.r[2]=fwd;
     } else {
         /* pitch and zoom are independent: UP/DOWN tilts (elevation), RB+UP/DOWN
          * dollies in/out at the current pitch. */
@@ -418,7 +461,7 @@ static void build_view(CueView *v) {
 void cue_game_render_begin(void) {
     CueView v; build_view(&v);
     Vec3 dir = v3(cosf(s_aim),0,sinf(s_aim));
-    int aiming = !s_dbg && s_screen==SC_GAME && (s_state==GS_AIM || s_state==GS_BACKSWING || s_state==GS_PLACE);
+    int aiming = !s_dbg && !s_freelook && s_screen==SC_GAME && (s_state==GS_AIM || s_state==GS_BACKSWING || s_state==GS_PLACE);
     float pw = (s_state==GS_BACKSWING) ? s_power : 0.0f;
     cue_render_build(&v, s_balls, s_n, aiming, 0, dir, pw, aiming);
 }
@@ -539,6 +582,8 @@ void cue_game_draw_overlay(uint16_t *fb) {
         }
         draw_spin_indicator(fb, 116, 112, 9);
         if (s_state == GS_PLACE) center(fb, "PLACE: DPAD  A SET", 119, RGB565C(240,240,160));
+        else if (s_freelook) center(fb, "FREE LOOK  A BACK", 119, RGB565C(150,200,150));
+        else if (s_state == GS_AIM) center(fb, "LB LOOK", 119, RGB565C(120,150,120));
         else if (s_state == GS_SHOOTING) center(fb, s_freeview ? "FREEVIEW" : "A FREEVIEW", 119, RGB565C(150,200,150));
         else if (s_msg_t > 0 && s_rules.msg[0]) center(fb, s_rules.msg, 30, RGB565C(255,230,140));
         int fps=(s_frame_ms>0.1f)?(int)(1000.0f/s_frame_ms+0.5f):0; if(fps>999)fps=999;
