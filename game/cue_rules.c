@@ -53,7 +53,7 @@ void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
     }
 }
 
-static int group_cleared(CueBall *b, int n, int grp) {
+static int group_cleared(const CueBall *b, int n, int grp) {
     for (int i = 1; i < n; i++)
         if (b[i].on && pool_group(b[i].id) == grp) return 0;
     return 1;
@@ -221,12 +221,13 @@ void cue_rules_resolve(CueRules *r, CueBall *b, int n, const CueWorld *w,
     else         resolve_pool(r, b, n, first_hit, scratch, cushion, potted, np);
 }
 
-int cue_rules_ball_legal(const CueRules *r, int id) {
+int cue_rules_ball_legal(const CueRules *r, const CueBall *b, int n, int id) {
     if (id == CUE_ID_CUE) return 0;
     if (r->kind) return snk_on(r, id);
-    if (r->open) return id != 8;
-    int g = pool_group(id);
-    return g == r->group[r->turn] || id == 8;
+    if (r->open) return id != 8;                 /* open table: anything but the 8 */
+    /* the 8 is legal ONLY once your own group is fully cleared */
+    if (id == 8) return group_cleared(b, n, r->group[r->turn]);
+    return pool_group(id) == r->group[r->turn];
 }
 
 void cue_rules_status(const CueRules *r, char *buf, int cap) {

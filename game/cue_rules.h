@@ -43,8 +43,9 @@ void cue_rules_resolve(CueRules *r, CueBall *balls, int n, const CueWorld *w,
                        int first_hit, int cue_scratch, int cushion_seen,
                        const int *potted, int npotted);
 
-/* Is `id` a legal ball to go for right now (used by the CPU planner)? */
-int  cue_rules_ball_legal(const CueRules *r, int id);
+/* Is `id` a legal ball to go for right now (used by the CPU planner)? Needs the
+ * ball array so the 8 is only legal once the shooter's group is cleared. */
+int  cue_rules_ball_legal(const CueRules *r, const CueBall *b, int n, int id);
 
 /* Short status line for the HUD (group / ball-on). */
 void cue_rules_status(const CueRules *r, char *buf, int cap);

@@ -376,7 +376,8 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
          * visible at the low aim-cam angle. */
         float gcx, gcy, axx, axy, azx, azy; uint16_t shd;
         const float sr = s_ballR * 1.55f;      /* shadow radius in world metres */
-        if (cue_render_project(v3(b->pos.x,      0.0f, b->pos.z),      &gcx, &gcy, &shd) &&
+        if (b->drop <= 0.0f &&                  /* no shadow once it's dropping in */
+            cue_render_project(v3(b->pos.x,      0.0f, b->pos.z),      &gcx, &gcy, &shd) &&
             cue_render_project(v3(b->pos.x + sr, 0.0f, b->pos.z),      &axx, &axy, NULL) &&
             cue_render_project(v3(b->pos.x,      0.0f, b->pos.z + sr), &azx, &azy, NULL)) {
             if (s_nshadow < CUE_MAX_BALLS) {

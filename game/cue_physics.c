@@ -36,6 +36,7 @@ void cue_world_defaults(CueWorld *w, float R, float mass) {
      * contact point sits ~0.27 R above centre; the contact normal tilts up by
      * asin(0.27). This tilt is what couples top/back spin into the rebound. */
     w->cush_tilt = asinf(0.27f);
+    w->first_hit = -1;
     w->_acc = 0.0f;
 }
 
@@ -285,10 +286,12 @@ static int check_pockets(const CueWorld *w, CueBall *b) {
         Vec3 d = v3_sub(b->pos, w->pocket[p]); d.y = 0.0f;
         float dist = sqrtf(d.x * d.x + d.z * d.z);
         if (dist < w->pocket_r[p]) {
-            b->on = 0;
+            /* begin the drop animation: the ball stays rendered (on=1) and
+             * falls into the pocket over ~0.4 s before it's removed. */
             b->pocket = (uint8_t)p;
             b->vel = v3(0, 0, 0);
             b->w = v3(0, 0, 0);
+            b->drop = 0.40f;
             return 1;
         }
     }
@@ -296,28 +299,45 @@ static int check_pockets(const CueWorld *w, CueBall *b) {
 }
 
 static void substep(CueWorld *w, CueBall *balls, int n, float h, uint32_t *ev) {
-    /* 1. cloth friction + integrate position/orientation */
+    /* 1. cloth friction + integrate. Balls mid-drop instead fall into the
+     * pocket (pulled to the centre + accelerating downward) and are removed
+     * when they sink below the recess. */
     for (int i = 0; i < n; i++) {
         CueBall *b = &balls[i];
         if (!b->on) continue;
+        if (b->drop > 0.0f) {
+            Vec3 pc = w->pocket[b->pocket];
+            float k = h * 12.0f; if (k > 1.0f) k = 1.0f;
+            b->pos.x += (pc.x - b->pos.x) * k;
+            b->pos.z += (pc.z - b->pos.z) * k;
+            b->vel.y -= w->g * 0.7f * h;             /* accelerate the fall */
+            b->pos.y += b->vel.y * h;
+            b->drop -= h;
+            if (b->drop <= 0.0f || b->pos.y < -0.11f) { b->on = 0; b->drop = 0.0f; }
+            ball_spin_orient(b, h);                  /* keep spinning as it drops */
+            continue;
+        }
         ball_cloth(w, b, h);
         b->pos = v3_add(b->pos, v3_scale(b->vel, h));
         b->pos.y = w->R;
         ball_spin_orient(b, h);
     }
-    /* 2. ball–ball */
+    /* 2. ball–ball (skip droppers). Record the CUE ball's (index 0) first
+     * object-ball contact for the rules. */
     for (int i = 0; i < n; i++) {
-        if (!balls[i].on) continue;
+        if (!balls[i].on || balls[i].drop > 0.0f) continue;
         for (int j = i + 1; j < n; j++) {
-            if (!balls[j].on) continue;
-            if (collide_ball_ball(w, &balls[i], &balls[j]))
+            if (!balls[j].on || balls[j].drop > 0.0f) continue;
+            if (collide_ball_ball(w, &balls[i], &balls[j])) {
                 if (ev) *ev |= CUE_EV_BALL_HIT;
+                if (w->first_hit < 0 && i == 0) w->first_hit = balls[j].id;
+            }
         }
     }
-    /* 3. cushions + jaws, then 4. pockets */
+    /* 3. cushions + jaws, then 4. pockets (skip droppers) */
     for (int i = 0; i < n; i++) {
         CueBall *b = &balls[i];
-        if (!b->on) continue;
+        if (!b->on || b->drop > 0.0f) continue;
         collide_cushions(w, b, ev);
         if (check_pockets(w, b) && ev) *ev |= CUE_EV_POCKET;
     }
@@ -327,6 +347,7 @@ int cue_phys_moving(const CueWorld *w, const CueBall *balls, int n) {
     for (int i = 0; i < n; i++) {
         if (!balls[i].on) continue;
         const CueBall *b = &balls[i];
+        if (b->drop > 0.0f) return 1;          /* wait for the drop to finish */
         float v2 = b->vel.x * b->vel.x + b->vel.z * b->vel.z;
         if (v2 > V_STOP * V_STOP) return 1;
         /* Spinning in place (english on a stationary ball) still counts. */

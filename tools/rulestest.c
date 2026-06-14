@@ -1,0 +1,58 @@
+/* 8-ball rules regression: CPU must not target the 8 early; hitting your own
+ * group when balls remain must NOT foul.
+ *   gcc -O2 -I../game rulestest.c ../game/cue_rules.c ../game/cue_table.c \
+ *       ../game/cue_physics.c -lm -o /tmp/rulestest && /tmp/rulestest
+ */
+#include "cue_rules.h"
+#include "cue_table.h"
+#include "cue_physics.h"
+#include <stdio.h>
+#include <string.h>
+
+static int fails = 0;
+#define CHECK(c, msg) do { if (!(c)) { printf("[FAIL] %s\n", msg); fails++; } \
+                           else printf("[PASS] %s\n", msg); } while (0)
+
+int main(void) {
+    CueTable t; cue_table_init(&t, CUE_GAME_POOL);
+    CueBall b[CUE_MAX_BALLS]; int n = cue_table_rack(&t, b);
+    CueWorld w; cue_table_build_world(&t, &w);
+
+    CueRules r; cue_rules_init(&r, &t, 1);
+    /* simulate: groups assigned, player 0 = solids (1-7), player 1 = stripes */
+    r.open = 0; r.break_shot = 0; r.turn = 0; r.group[0] = 1; r.group[1] = 2;
+
+    /* leave solids 3,4,5,6,7 on table (1,2 potted); stripes all on; 8 on */
+    for (int i = 0; i < n; i++) {
+        int id = b[i].id;
+        if (id == 1 || id == 2) b[i].on = 0;   /* two solids gone */
+    }
+
+    /* (1) the 8 is NOT a legal target while solids remain */
+    CHECK(!cue_rules_ball_legal(&r, b, n, 8), "8 illegal while group has balls left");
+    /* a remaining solid IS legal; a stripe is not */
+    CHECK( cue_rules_ball_legal(&r, b, n, 3), "own group ball legal");
+    CHECK(!cue_rules_ball_legal(&r, b, n, 11), "opponent group ball illegal");
+
+    /* (2) hitting your own group first (no pot) must NOT foul */
+    {
+        CueRules rr = r; int potted[1]; int np = 0;
+        cue_rules_resolve(&rr, b, n, &w, /*first_hit=*/3, /*scratch=*/0,
+                          /*cushion=*/1, potted, np);
+        CHECK(rr.msg[0] == 0 || strstr(rr.msg, "FOUL") == NULL,
+              "hit own group, no pot -> no foul (turn passes)");
+    }
+
+    /* (3) clear all solids -> now the 8 is legal and required */
+    for (int i = 0; i < n; i++) if (b[i].id >= 1 && b[i].id <= 7) b[i].on = 0;
+    CHECK( cue_rules_ball_legal(&r, b, n, 8), "8 legal once group cleared");
+    {
+        CueRules rr = r; int potted[1]; int np = 0;
+        cue_rules_resolve(&rr, b, n, &w, /*first_hit=*/11, 0, 1, potted, np);
+        CHECK(strstr(rr.msg, "FOUL") != NULL,
+              "group cleared, hit opponent/non-8 -> foul (must hit 8)");
+    }
+
+    printf(fails ? "\n%d FAIL\n" : "\nALL PASS\n", fails);
+    return fails ? 1 : 0;
+}

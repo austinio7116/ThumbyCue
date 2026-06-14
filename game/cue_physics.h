@@ -36,10 +36,12 @@ typedef struct {
     Vec3 vel;        /* m/s (y = 0) */
     Vec3 w;          /* angular velocity rad/s (world) */
     Mat3 orient;     /* render orientation, integrated from w */
-    uint8_t on;      /* 1 = on the table, 0 = potted/off */
+    uint8_t on;      /* 1 = on the table (incl. mid-drop), 0 = gone */
     uint8_t id;      /* ball number / colour code (game-defined) */
     uint8_t pocket;  /* if potted: which pocket index it fell in */
     uint8_t _pad;
+    float drop;      /* >0 while falling into the pocket (seconds remaining);
+                      * still renders (sinking) but is out of play */
 } CueBall;
 
 /* A cushion nose segment in the X–Z plane with an inward unit normal
@@ -65,6 +67,10 @@ typedef struct {
     CueSeg seg[CUE_MAX_SEG]; int nseg;
     Vec3   jaw[CUE_MAX_SEG]; int njaw; float jaw_r;   /* immovable jaw-tip circles */
     Vec3   pocket[CUE_MAX_POCKET]; float pocket_r[CUE_MAX_POCKET]; int npocket;
+
+    /* First object ball (id) the CUE ball contacts after a strike; -1 = none.
+     * Reset to -1 before each shot; read at settle for rules. */
+    int first_hit;
 
     /* Integrator accumulator (do not touch). */
     float _acc;

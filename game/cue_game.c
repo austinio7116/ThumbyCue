@@ -99,6 +99,7 @@ static void begin_shot(void) {
     cue_phys_strike(&s_world, &s_balls[0], dir, s_power * MAX_STRIKE_SPEED,
                     s_tip_side, s_tip_vert);
     s_world._acc = 0.0f;
+    s_world.first_hit = -1;            /* physics records the cue's real first contact */
     s_first_hit = -1; s_cushion_seen = 0;
     for (int i = 0; i < s_n; i++) s_was_on[i] = s_balls[i].on;
     cue_audio_sfx(CUE_SFX_STRIKE, s_power);
@@ -116,7 +117,7 @@ static void cpu_plan(void) {
     float best = -1e9f; float best_aim = s_aim; float best_pow = 0.5f;
     for (int i = 1; i < s_n; i++) {
         if (!s_balls[i].on) continue;
-        if (!cue_rules_ball_legal(&s_rules, s_balls[i].id)) continue;
+        if (!cue_rules_ball_legal(&s_rules, s_balls, s_n, s_balls[i].id)) continue;
         Vec3 ob = s_balls[i].pos;
         for (int p = 0; p < s_world.npocket; p++) {
             Vec3 pk = s_world.pocket[p];
@@ -248,12 +249,8 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
         if (ev & CUE_EV_BALL_HIT) cue_audio_sfx(CUE_SFX_CLACK, 0.25f + 0.75f*hit_i);
         if (ev & CUE_EV_CUSHION)  { cue_audio_sfx(CUE_SFX_CUSHION, 0.2f + 0.7f*hit_i); s_cushion_seen = 1; }
         if (ev & CUE_EV_POCKET)   cue_audio_sfx(CUE_SFX_POT, 0.2f + 0.7f*hit_i);
-        /* first object ball to move ≈ first ball the cue contacted */
-        if (s_first_hit < 0)
-            for (int i = 1; i < s_n; i++) {
-                float v2 = s_balls[i].vel.x*s_balls[i].vel.x + s_balls[i].vel.z*s_balls[i].vel.z;
-                if (s_was_on[i] && v2 > 0.02f) { s_first_hit = s_balls[i].id; break; }
-            }
+        /* the cue ball's true first object-ball contact, recorded by the physics */
+        s_first_hit = s_world.first_hit;
         if (!moving) {
             /* gather what happened, hand to the rules engine */
             int potted[CUE_MAX_BALLS], np = 0, cue_scratch = !s_balls[0].on;
