@@ -52,6 +52,13 @@ int main(int argc, char **argv) {
     const char *shot = getenv("CUE_SHOT");
     if (shot) {
         CraftRawButtons b; memset(&b, 0, sizeof b);
+        const char *cam = getenv("CUE_CAM");      /* ex,ey,ez,tx,ty,tz,fov */
+        if (cam) {
+            float p[7] = {0,0,0,0,0,0,52};
+            sscanf(cam, "%f,%f,%f,%f,%f,%f,%f",
+                   &p[0],&p[1],&p[2],&p[3],&p[4],&p[5],&p[6]);
+            cue_game_debug_cam(p[0],p[1],p[2],p[3],p[4],p[5],p[6]);
+        }
         if (getenv("CUE_OVERHEAD")) {           /* tap LB once to toggle */
             b.lb = 1; cue_game_tick(&b, 1.0f / 60.0f); b.lb = 0;
         }

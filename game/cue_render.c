@@ -141,9 +141,34 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         quad(ao, bo, v3(bo.x, 0, bo.z), v3(ao.x, 0, ao.z), wood);
     }
 
-    /* Knuckle posts: short cylinders at every jaw point — sharp rubber points
-     * for US, fat rounded knuckles for snooker, all from the same jaw_r. */
-    uint16_t knub = shade565(t->cloth, 0.6f);
+    /* Pocket openings at their true geometric spots (corner points & long-rail
+     * midpoints). Each is a dark disc sitting JUST above the bed (so it wins
+     * the depth test over the green and reads as a clean hole from any angle)
+     * with a wall ring dropping below for depth. */
+    uint16_t pk_top = RGB565C(10, 12, 12), pk_wall = RGB565C(3, 4, 4);
+    struct { float x, z, r; } pk[6] = {
+        {  hl,  hw, t->mouth_corner * 0.62f }, { -hl,  hw, t->mouth_corner * 0.62f },
+        {  hl, -hw, t->mouth_corner * 0.62f }, { -hl, -hw, t->mouth_corner * 0.62f },
+        { 0.0f, hw, t->mouth_side * 0.56f },   { 0.0f, -hw, t->mouth_side * 0.56f },
+    };
+    const float yt = 0.005f, yb = -0.05f;
+    for (int p = 0; p < 6; p++) {
+        float cx = pk[p].x, cz = pk[p].z, r = pk[p].r;
+        Vec3 ctr = v3(cx, yt, cz);
+        const int N = 16;
+        for (int k = 0; k < N; k++) {
+            float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
+            Vec3 e0 = v3(cx + r * cosf(a0), yt, cz + r * sinf(a0));
+            Vec3 e1 = v3(cx + r * cosf(a1), yt, cz + r * sinf(a1));
+            tri(ctr, e0, e1, pk_top);                          /* opening disc */
+            Vec3 e0b = v3(e0.x, yb, e0.z), e1b = v3(e1.x, yb, e1.z);
+            quad(e0, e1, e1b, e0b, pk_wall);                   /* wall down */
+        }
+    }
+
+    /* Knuckle posts: short rounded nubs at the jaw tips (the rubber points /
+     * snooker knuckles). cloth-coloured, only up to the nose height. */
+    uint16_t knub = shade565(t->cloth, 0.62f);
     for (int j = 0; j < w->njaw; j++) {
         Vec3 c = w->jaw[j]; float r = t->jaw_r;
         const int N = 8;
@@ -151,23 +176,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
             Vec3 p0 = v3(c.x + r * cosf(a0), 0, c.z + r * sinf(a0));
             Vec3 p1 = v3(c.x + r * cosf(a1), 0, c.z + r * sinf(a1));
-            Vec3 t0 = v3(p0.x, nose_h, p0.z), t1 = v3(p1.x, nose_h, p1.z);
-            quad(p0, p1, t1, t0, knub);
-        }
-    }
-
-    /* Pocket funnels: recessed cones, sized to the mouth, drawn last. */
-    uint16_t pk_rim = RGB565C(12, 14, 14), pk_low = RGB565C(3, 4, 4);
-    for (int p = 0; p < w->npocket; p++) {
-        Vec3 c = w->pocket[p];
-        float ro = w->pocket_r[p] * 1.15f;
-        Vec3 bottom = v3(c.x, -0.06f, c.z);
-        const int N = 14;
-        for (int k = 0; k < N; k++) {
-            float t0 = k * (6.2831853f / N), t1 = (k + 1) * (6.2831853f / N);
-            Vec3 r0 = v3(c.x + ro * cosf(t0), rail_h - 0.001f, c.z + ro * sinf(t0));
-            Vec3 r1 = v3(c.x + ro * cosf(t1), rail_h - 0.001f, c.z + ro * sinf(t1));
-            tri(r0, r1, bottom, (k & 1) ? pk_low : pk_rim);
+            Vec3 q0 = v3(p0.x, nose_h, p0.z), q1 = v3(p1.x, nose_h, p1.z);
+            quad(p0, p1, q1, q0, knub);
         }
     }
 }

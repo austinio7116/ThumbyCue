@@ -27,6 +27,7 @@ static int       s_state;
 static int       s_kind;          /* 0 pool 1 snooker */
 
 static float s_aim;               /* aim azimuth (rad) */
+static float s_view_az;           /* camera orbit azimuth (rad) */
 static float s_cam_elev = 0.34f;  /* aim-cam height (m) */
 static float s_cam_dist = 0.62f;  /* aim-cam back distance (m) */
 static int   s_overhead;
@@ -86,8 +87,9 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
     }
     if (jp_lb) s_overhead ^= 1;
     int jr_a = !b->a && s_prev.a;                 /* A released this frame */
-    /* RB held = fine aim (precision); otherwise normal speed. */
-    float aim_rate = b->rb ? 0.32f : 1.4f;
+    /* RB held = fine aim (precision); otherwise normal speed. Kept slow —
+     * a cue stroke is a small angular adjustment. */
+    float aim_rate = b->rb ? 0.10f : 0.55f;
 
     if (s_state == GS_AIM || s_state == GS_BACKSWING) {
         if (b->b) {
@@ -117,6 +119,9 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         }
     }
 
+    /* while aiming, the camera sits behind the aim line */
+    if (s_state == GS_AIM || s_state == GS_BACKSWING) s_view_az = s_aim;
+
     if (s_state == GS_AIM) {
         /* hold A to begin the backswing */
         if (b->a) { s_state = GS_BACKSWING; s_power = 0.0f; }
@@ -138,6 +143,16 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
             }
         }
     } else { /* GS_SHOOTING */
+        /* free-orbit the follow camera so you can watch the balls; the camera
+         * tracks the (moving) cue ball, d-pad spins/tilts around it. */
+        if (!b->b) {
+            if (b->left)  s_view_az += 1.1f * dt;
+            if (b->right) s_view_az -= 1.1f * dt;
+            if (b->up)    s_cam_elev += 0.5f * dt;
+            if (b->down)  s_cam_elev -= 0.5f * dt;
+            if (s_cam_elev < 0.10f) s_cam_elev = 0.10f;
+            if (s_cam_elev > 0.9f)  s_cam_elev = 0.9f;
+        }
         uint32_t ev = 0;
         int moving = cue_phys_step(&s_world, s_balls, s_n, dt, &ev);
         s_settle_flash |= ev;
@@ -160,11 +175,30 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
     s_prev = *b;
 }
 
+/* ---- debug camera (inspection screenshots) ----------------------------- */
+static int  s_dbg = 0;
+static Vec3 s_dbg_eye, s_dbg_tgt;
+static float s_dbg_fov = 52.0f;
+void cue_game_debug_cam(float ex, float ey, float ez,
+                        float tx, float ty, float tz, float fov) {
+    s_dbg = 1; s_dbg_eye = v3(ex, ey, ez); s_dbg_tgt = v3(tx, ty, tz);
+    s_dbg_fov = fov;
+}
+
 /* ---- camera ------------------------------------------------------------ */
 static void build_view(CueView *v) {
+    if (s_dbg) {
+        v->fov_deg = s_dbg_fov;
+        Vec3 fwd = v3_norm(v3_sub(s_dbg_tgt, s_dbg_eye));
+        Vec3 right = v3_norm(v3_cross(v3(0, 1, 0), fwd));
+        Vec3 up = v3_cross(fwd, right);
+        v->pos = s_dbg_eye;
+        v->basis.r[0] = right; v->basis.r[1] = up; v->basis.r[2] = fwd;
+        return;
+    }
     v->fov_deg = 52.0f;
     Vec3 P = cue_pos();
-    Vec3 dir = v3(cosf(s_aim), 0, sinf(s_aim));
+    Vec3 dir = v3(cosf(s_view_az), 0, sinf(s_view_az));   /* camera orbit */
     if (s_overhead) {
         float focal = 64.0f / tanf(v->fov_deg * DEG2RAD * 0.5f);
         float ext = (s_table.half_len > s_table.half_wid)
@@ -192,7 +226,7 @@ static void build_view(CueView *v) {
 void cue_game_render_begin(void) {
     CueView v; build_view(&v);
     Vec3 dir = v3(cosf(s_aim), 0, sinf(s_aim));
-    int aiming = (s_state == GS_AIM || s_state == GS_BACKSWING);
+    int aiming = !s_dbg && (s_state == GS_AIM || s_state == GS_BACKSWING);
     float pw = (s_state == GS_BACKSWING) ? s_power : 0.0f;
     cue_render_build(&v, s_balls, s_n, aiming, 0, dir, pw, aiming);
 }

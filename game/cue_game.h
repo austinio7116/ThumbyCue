@@ -10,6 +10,9 @@
 
 void cue_game_init(uint32_t seed);
 void cue_game_set_kind(int snooker);          /* 0 = pool, 1 = snooker */
+/* Debug: override the camera (eye + look target, fov) for inspection shots. */
+void cue_game_debug_cam(float ex, float ey, float ez,
+                        float tx, float ty, float tz, float fov);
 void cue_game_tick(const CraftRawButtons *btn, float dt);
 
 /* core0 builds the frame; both cores raster their band; overlay is 2D HUD. */
