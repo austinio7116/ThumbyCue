@@ -36,5 +36,7 @@ int cue_render_project(Vec3 world, float *sx, float *sy, uint16_t *d);
 
 /* Ball lighting style: 0 smooth, 1 hard, 2 toon, 3 gloss. */
 void cue_render_set_light_mode(int m);
+/* Ball set: 0 PRO, 1 UK yellow/blue, 2 UK yellow/red, 3 US dyna stripe. */
+void cue_render_set_ball_set(int s);
 
 #endif

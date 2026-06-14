@@ -35,6 +35,13 @@ static const char *k_mode_name[CUE_GAME_COUNT] = {
     "UK 8-BALL", "US 8-BALL", "US 9-BALL", "SNOOKER 10", "SNOOKER 15" };
 static int s_cpu;             /* opponent: 0 = 2 player, 1 = CPU */
 static int s_cloth_idx;
+static int s_ballset;          /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna */
+static const char *k_ballset_name[4] = { "PRO", "UK Y/B", "UK Y/R", "DYNA" };
+static int default_ballset(int mode) {
+    if (mode == CUE_GAME_UK8) return 1;        /* yellow/blue solids */
+    if (mode == CUE_GAME_US8) return 3;        /* dyna stripe */
+    return 0;                                  /* US9 / others → pro */
+}
 static int s_vol = 14;        /* 0..20 */
 
 /* ---- world / table --------------------------------------------------- */
@@ -73,6 +80,7 @@ static int jp(int cur, int prev) { return cur && !prev; }
 static void rack(void) {
     cue_table_init(&s_table, (CueGameKind)s_kind);
     if (!s_table.is_snooker) s_table.cloth = k_cloth[s_cloth_idx];  /* pool felt choice */
+    cue_render_set_ball_set(s_ballset);
     cue_table_build_world(&s_table, &s_world);
     s_n = cue_table_rack(&s_table, s_balls);
     cue_render_build_table(&s_table, &s_world);
@@ -303,12 +311,17 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         else if (sel == 2) { s_screen = SC_CUSTOM; s_cursor = 0; }
         break; }
     case SC_PLAY: {
-        /* items: GAME, OPPONENT, START, (back via B) */
-        menu_move(b, 3);
-        if (s_cursor == 0 && jp(b->right,s_prev.right)) s_kind = (s_kind + 1) % CUE_GAME_COUNT;
-        if (s_cursor == 0 && jp(b->left, s_prev.left))  s_kind = (s_kind + CUE_GAME_COUNT - 1) % CUE_GAME_COUNT;
+        /* items: GAME, OPPONENT, BALLS, START, (back via B) */
+        menu_move(b, 4);
+        if (s_cursor == 0 && (jp(b->right,s_prev.right) || jp(b->left,s_prev.left))) {
+            int d = jp(b->right,s_prev.right) ? 1 : (CUE_GAME_COUNT - 1);
+            s_kind = (s_kind + d) % CUE_GAME_COUNT;
+            s_ballset = default_ballset(s_kind);     /* sensible default per game */
+        }
         if (s_cursor == 1 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right))) s_cpu ^= 1;
-        if (s_cursor == 2 && jp(b->a, s_prev.a)) { new_frame(); s_screen = SC_GAME; }
+        if (s_cursor == 2 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right)))
+            s_ballset = (s_ballset + (jp(b->right,s_prev.right)?1:3)) % 4;
+        if (s_cursor == 3 && jp(b->a, s_prev.a)) { new_frame(); s_screen = SC_GAME; }
         if (jp(b->b, s_prev.b)) { s_screen = SC_MAIN; s_cursor = 0; }
         break; }
     case SC_OPTIONS: {
@@ -465,10 +478,12 @@ void cue_game_draw_overlay(uint16_t *fb) {
         dim(fb, 8);
         center(fb, "PLAY", 14, RGB565C(255,240,200));
         snprintf(buf,sizeof buf,"GAME  < %s >", k_mode_name[s_kind]);
-        const char *it[3]; it[0]=buf;
-        char obuf[24]; snprintf(obuf,sizeof obuf,"VS     < %s >", s_cpu?"CPU":"PLAYER 2");
-        it[1]=obuf; it[2]="START";
-        menu_list(fb, it, 3, s_cursor, 44);
+        const char *it[4]; it[0]=buf;
+        char obuf[24]; snprintf(obuf,sizeof obuf,"VS    < %s >", s_cpu?"CPU":"PLAYER 2");
+        char bbuf[24]; snprintf(bbuf,sizeof bbuf,"BALLS < %s >",
+            s_table.is_snooker ? "SNOOKER" : k_ballset_name[s_ballset]);
+        it[1]=obuf; it[2]=bbuf; it[3]="START";
+        menu_list(fb, it, 4, s_cursor, 40);
         center(fb, "B BACK", 116, RGB565C(150,150,160));
         break; }
     case SC_OPTIONS: {

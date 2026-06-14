@@ -22,6 +22,7 @@ static uint16_t s_cloth_shadow;  /* dark cloth tint for ball shadow-side bounce 
 static float    s_ballR = 0.0286f;
 static int      s_is_snooker;   /* ids 1..15 mean reds, not solids/stripes */
 static int      s_lip_mode = 1;  /* 0=none 1=tight 2=wide 3=deep (CUE_LIP env) */
+static int      s_ball_set = 0;  /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna */
 
 /* ---- per-frame projected lists ---------------------------------------- */
 typedef struct { float x0,y0,x1,y1,x2,y2; uint16_t d0,d1,d2; uint16_t color; } STri;
@@ -208,6 +209,7 @@ static void wood_band(float xa, float xb, float za, float zb,
 
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     { extern char *getenv(const char*); const char *e = getenv("CUE_LIP"); if (e) s_lip_mode = e[0]-'0'; }
+    { extern char *getenv(const char*); const char *e2 = getenv("CUE_BALLSET"); if (e2) s_ball_set = e2[0]-'0'; }
     s_ntab = 0;
     s_cloth = t->cloth;
     s_ballR = t->R;
@@ -540,6 +542,25 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
     }
 }
 
+/* ---- ball sets --------------------------------------------------------- */
+/* 0 = PRO (per-number coloured solids/stripes), 1 = UK yellow/blue solids,
+ * 2 = UK yellow/red solids, 3 = US "dyna" (yellow solids / maroon stripes). */
+void cue_render_set_ball_set(int s) { s_ball_set = (s < 0 || s > 3) ? 0 : s; }
+
+/* the standard pro per-number hues for ids 1..7 (9..15 reuse 1..7's hue) */
+static const uint16_t k_prohue[8] = {
+    0, RGB565C(235,200,40), RGB565C(30,80,200), RGB565C(200,40,40),
+    RGB565C(120,40,160), RGB565C(230,120,30), RGB565C(20,130,50),
+    RGB565C(120,30,40) };
+#define BALL_YELLOW RGB565C(235,200,40)
+#define BALL_GOLD   RGB565C(228,165,20)
+#define BALL_BLUE   RGB565C(30,80,200)
+#define BALL_RED    RGB565C(200,40,40)
+#define BALL_MAROON RGB565C(120,22,42)
+#define BALL_BLACK  RGB565C(20,20,22)
+#define BALL_WHITE  RGB565C(235,235,225)
+static int set_striped(void) { return s_ball_set == 0 || s_ball_set == 3; }  /* PRO/DYNA stripe 9-15 */
+
 /* ---- ball texture ------------------------------------------------------ */
 static uint16_t ball_base(uint8_t id) {
     switch (id) {
@@ -552,15 +573,15 @@ static uint16_t ball_base(uint8_t id) {
         case CUE_ID_BLACK:  return RGB565C(20, 20, 22);
     }
     if (s_is_snooker) return RGB565C(190, 30, 30);          /* reds 1..15 */
-    /* pool: 1-7 solids, 8 black, 9-15 stripes (hue of id-8). */
-    static const uint16_t hue[8] = {
-        0, RGB565C(235,200,40), RGB565C(30,80,200), RGB565C(200,40,40),
-        RGB565C(120,40,160), RGB565C(230,120,30), RGB565C(20,130,50),
-        RGB565C(120,30,40) };
-    if (id >= 1 && id <= 7) return hue[id];
-    if (id == 8) return RGB565C(20, 20, 22);
-    if (id >= 9 && id <= 15) return RGB565C(235, 235, 225); /* white body */
-    return RGB565C(200, 40, 40);
+    if (id == 8) return BALL_BLACK;
+    switch (s_ball_set) {
+        case 1: return (id <= 7) ? BALL_YELLOW : BALL_BLUE;     /* UK yellow/blue */
+        case 2: return (id <= 7) ? BALL_YELLOW : BALL_RED;      /* UK yellow/red  */
+        case 3: return (id <= 7) ? BALL_GOLD   : BALL_WHITE;    /* dyna: striped body */
+        default:                                               /* PRO */
+            if (id >= 1 && id <= 7) return k_prohue[id];
+            return BALL_WHITE;                                 /* 9-15 white striped body */
+    }
 }
 /* Sample the ball's surface colour for a ball-local unit normal. */
 static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
@@ -573,22 +594,19 @@ static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
         return base;
     }
     if (s_is_snooker) return base;              /* snooker balls are unmarked */
-    if (id >= 9 && id <= 15) {                  /* stripe band + number patch */
-        if (fabsf(nb.y) < 0.45f) {
-            static const uint16_t hue[8] = {
-                0, RGB565C(235,200,40), RGB565C(30,80,200), RGB565C(200,40,40),
-                RGB565C(120,40,160), RGB565C(230,120,30), RGB565C(20,130,50),
-                RGB565C(120,30,40) };
-            return hue[id - 8];
+    int us = (s_ball_set == 0 || s_ball_set == 3);   /* US sets carry numbers */
+    if (id >= 9 && id <= 15) {
+        if (set_striped() && fabsf(nb.y) < 0.34f) {   /* stripe band (thin) */
+            return (s_ball_set == 3) ? BALL_MAROON : k_prohue[id - 8];
         }
-        if (nb.x > 0.90f) return RGB565C(245, 245, 245);   /* number patch */
+        if (us && nb.x > 0.90f) return RGB565C(245, 245, 245);   /* number patch */
+        return base;                            /* UK: solid body, no stripe */
+    }
+    if (id >= 1 && id <= 8) {                    /* solids + 8 */
+        if (us && nb.x > 0.90f) return RGB565C(245, 245, 245);   /* number patch */
         return base;
     }
-    if ((id >= 1 && id <= 8)) {                 /* solids + 8: white patch */
-        if (nb.x > 0.90f) return RGB565C(245, 245, 245);
-        return base;
-    }
-    return base;                                /* snooker plain colours */
+    return base;
 }
 
 /* ---- raster ------------------------------------------------------------ */
