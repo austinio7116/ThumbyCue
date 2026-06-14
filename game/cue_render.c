@@ -126,6 +126,61 @@ static void ribbon(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col) {
     }
 }
 
+/* Baize lip (the drop): rolls the cloth down into each pocket throat. Emitted
+ * AFTER the pocket voids so depth-test layers it OVER the void (no rim cutting
+ * across it) while the raised cushions still occlude its sides. */
+static void emit_pocket_lips(const CueTable *t, const CueWorld *w) {
+    if (!s_lip_mode) return;
+    int nb = w->njaw;
+    for (int i = 0; i < nb; i++) {
+        if (!(i & 1)) continue;                 /* only pocket-mouth edges */
+        Vec3 a = v3(w->jaw[i].x, 0, w->jaw[i].z);
+        Vec3 b = v3(w->jaw[(i + 1) % nb].x, 0, w->jaw[(i + 1) % nb].z);
+        Vec3 m = v3((a.x + b.x) * 0.5f, 0, (a.z + b.z) * 0.5f);
+        float ml = sqrtf(m.x * m.x + m.z * m.z);
+        Vec3 din = (ml > 1e-5f) ? v3(-m.x / ml, 0, -m.z / ml) : v3(0, 0, 0);
+        float chord = sqrtf((b.x-a.x)*(b.x-a.x) + (b.z-a.z)*(b.z-a.z));
+        float blg = chord * 0.32f;
+        Vec3 c = v3(m.x + din.x * blg * 2.0f, 0, m.z + din.z * blg * 2.0f);
+        const int N = 6;
+        Vec3 arc[N + 1]; arc[0] = a;
+        for (int k = 1; k <= N; k++) {
+            float tt = (float)k / N, o = 1.0f - tt;
+            arc[k] = v3(o*o*a.x + 2*o*tt*c.x + tt*tt*b.x, 0,
+                        o*o*a.z + 2*o*tt*c.z + tt*tt*b.z);
+        }
+        int pidx = 0; float bestp = 1e9f;
+        for (int q = 0; q < w->npocket; q++) {
+            float dx = w->pocket[q].x - m.x, dz = w->pocket[q].z - m.z;
+            float dd = dx*dx + dz*dz;
+            if (dd < bestp) { bestp = dd; pidx = q; }
+        }
+        Vec3 pc = w->pocket[pidx];
+        float pr = (pidx < 4) ? t->pr_corner : t->pr_side;
+        int M; float lw, ld;
+        switch (s_lip_mode) {
+            case 2:  M = 5; lw = 0.95f*pr; ld = 0.55f*pr; break;
+            case 3:  M = 6; lw = 0.80f*pr; ld = 0.80f*pr; break;
+            default: M = 4; lw = 0.60f*pr; ld = 0.45f*pr; break;
+        }
+        Vec3 ring0[N + 1]; for (int k = 0; k <= N; k++) ring0[k] = arc[k];
+        for (int s = 1; s <= M; s++) {
+            float phi = (float)s / M * 1.5707963f;
+            float off = lw * sinf(phi), yy = -ld * (1.0f - cosf(phi));
+            uint16_t col = shade565(t->cloth, 1.0f - 0.92f*(1.0f - cosf(phi)));
+            Vec3 ring1[N + 1];
+            for (int k = 0; k <= N; k++) {
+                float dx = pc.x - arc[k].x, dz = pc.z - arc[k].z;
+                float l = sqrtf(dx*dx + dz*dz) + 1e-6f;
+                ring1[k] = v3(arc[k].x + dx/l*off, yy, arc[k].z + dz/l*off);
+            }
+            for (int k = 0; k < N; k++)
+                quad(ring0[k], ring0[k+1], ring1[k+1], ring1[k], col);
+            for (int k = 0; k <= N; k++) ring0[k] = ring1[k];
+        }
+    }
+}
+
 /* A rail-top wood band [xa,xb]×[za,zb] with a real circular hole cut out at
  * (hx,hz) radius hr — so the side-pocket void has NO wood inside it to peek
  * through at the seams (the thin rail-edge line / shoulder wedges). */
@@ -188,46 +243,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                 tri(v3(0, 0, 0), arc[k-1], p, t->cloth);
                 arc[k] = p;
             }
-            /* Baize lip: roll the cloth down into the pocket throat (needed for
-             * the ball-drop). Curved pockets roll toward the round centre; mitred
-             * (US) pockets roll straight back. The lip lives in the open mouth —
-             * the cushions are drawn AFTER and depth-occlude it on the sides, so
-             * it never overlaps the mitre. */
-            if (s_lip_mode) {
-                int pidx = 0; float bestp = 1e9f;
-                for (int q = 0; q < w->npocket; q++) {
-                    float dx = w->pocket[q].x - m.x, dz = w->pocket[q].z - m.z;
-                    float dd = dx*dx + dz*dz;
-                    if (dd < bestp) { bestp = dd; pidx = q; }
-                }
-                Vec3 pc = w->pocket[pidx];
-                float pr = (pidx < 4) ? t->pr_corner : t->pr_side;
-                int M; float lw, ld;
-                switch (s_lip_mode) {
-                    case 2:  M = 5; lw = 0.95f*pr; ld = 0.55f*pr; break;  /* wide */
-                    case 3:  M = 6; lw = 0.80f*pr; ld = 0.80f*pr; break;  /* deep */
-                    default: M = 4; lw = 0.60f*pr; ld = 0.45f*pr; break;  /* tight */
-                }
-                Vec3 ring0[N + 1]; for (int k = 0; k <= N; k++) ring0[k] = arc[k];
-                for (int s = 1; s <= M; s++) {
-                    float phi = (float)s / M * 1.5707963f;
-                    float off = lw * sinf(phi), yy = -ld * (1.0f - cosf(phi));
-                    /* fade to near-black as it rolls down so the lip sinks into
-                     * the void instead of showing bright-green flecks at depth */
-                    uint16_t col = shade565(t->cloth, 1.0f - 0.92f*(1.0f - cosf(phi)));
-                    Vec3 ring1[N + 1];
-                    for (int k = 0; k <= N; k++) {
-                        /* roll the cloth toward the pocket centre (same drop for
-                         * every table — only the cushion differs) */
-                        float dx = pc.x - arc[k].x, dz = pc.z - arc[k].z;
-                        float l = sqrtf(dx*dx + dz*dz) + 1e-6f;
-                        ring1[k] = v3(arc[k].x + dx/l*off, yy, arc[k].z + dz/l*off);
-                    }
-                    for (int k = 0; k < N; k++)
-                        quad(ring0[k], ring0[k+1], ring1[k+1], ring1[k], col);
-                    for (int k = 0; k <= N; k++) ring0[k] = ring1[k];
-                }
-            }
+            /* the baize lip (drop) is emitted AFTER the pocket voids — see
+             * emit_pocket_lips() below — so the void can't draw its rim across it */
         } else {
             tri(v3(0, 0, 0), a, b, t->cloth);
         }
@@ -340,6 +357,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         }
     }
 
+    emit_pocket_lips(t, w);   /* drop lip last → layers over the voids cleanly */
 }
 
 /* ---- per-frame build --------------------------------------------------- */
