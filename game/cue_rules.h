@@ -21,6 +21,9 @@ typedef struct {
     int group[2];        /* 0 = open, 1 = low(1-7), 2 = high(9-15) */
     int open;
     int break_shot;
+    int shots_remaining; /* UK two-shot rule: shots left in this visit (1 or 2) */
+    int two_shot;        /* opponent is on the two-shot carry from a foul */
+    int free_shot;       /* first of the two shots — informational */
 
     /* snooker */
     int target;          /* 0 = red, 1 = a colour, 2 = clearance sequence */

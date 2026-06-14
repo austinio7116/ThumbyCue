@@ -27,7 +27,9 @@ static STri s_stri[MAX_STRI]; static int s_nstri;
 
 typedef struct { float cx, cy, rad, viewz; Mat3 orient; uint8_t id; } Sprite;
 static Sprite s_spr[CUE_MAX_BALLS]; static int s_nspr;
-static struct { float cx, cy, rad; uint16_t d; } s_shadow[CUE_MAX_BALLS];
+/* ground-plane shadow decal: centre + two screen-space axis vectors (the
+ * projection of world +X and +Z offsets), so it foreshortens with the cloth */
+static struct { float cx, cy, ux, uy, vx, vy; uint16_t d; } s_shadow[CUE_MAX_BALLS];
 static int s_nshadow;
 
 #define MAX_DOTS 48
@@ -77,8 +79,10 @@ int cue_render_project(Vec3 world, float *sx, float *sy, uint16_t *d) {
     float inv = 1.0f / vv.z;
     *sx = 64.0f + s_focal * vv.x * inv;
     *sy = 64.0f - s_focal * vv.y * inv;
-    float dd = CUE_DEPTH_K * inv;
-    *d = (dd >= 65535.0f) ? 65535u : (dd < 1.0f ? 1u : (uint16_t)dd);
+    if (d) {
+        float dd = CUE_DEPTH_K * inv;
+        *d = (dd >= 65535.0f) ? 65535u : (dd < 1.0f ? 1u : (uint16_t)dd);
+    }
     return 1;
 }
 /* project + return view-space z (for sphere radius / per-pixel depth). */
@@ -338,13 +342,19 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
             sp->cx = sx; sp->cy = sy; sp->rad = rad; sp->viewz = vz;
             sp->orient = b->orient; sp->id = b->id;
         }
-        /* shadow: directly UNDER the ball (lights are overhead, no side cast),
-         * larger + soft like a real table under big diffuse lamps. */
-        float shx, shy; uint16_t shd;
-        if (cue_render_project(v3(b->pos.x, 0.0001f, b->pos.z), &shx, &shy, &shd)) {
+        /* shadow: a soft disc lying flat ON the cloth, directly under the ball
+         * (lamps are overhead → no side cast). Built as a ground-plane decal so
+         * it foreshortens with the table and spreads toward the camera, staying
+         * visible at the low aim-cam angle. */
+        float gcx, gcy, axx, axy, azx, azy; uint16_t shd;
+        const float sr = s_ballR * 1.55f;      /* shadow radius in world metres */
+        if (cue_render_project(v3(b->pos.x,      0.0f, b->pos.z),      &gcx, &gcy, &shd) &&
+            cue_render_project(v3(b->pos.x + sr, 0.0f, b->pos.z),      &axx, &axy, NULL) &&
+            cue_render_project(v3(b->pos.x,      0.0f, b->pos.z + sr), &azx, &azy, NULL)) {
             if (s_nshadow < CUE_MAX_BALLS) {
-                s_shadow[s_nshadow].cx = shx; s_shadow[s_nshadow].cy = shy;
-                s_shadow[s_nshadow].rad = rad * 1.35f;
+                s_shadow[s_nshadow].cx = gcx; s_shadow[s_nshadow].cy = gcy;
+                s_shadow[s_nshadow].ux = axx - gcx; s_shadow[s_nshadow].uy = axy - gcy;
+                s_shadow[s_nshadow].vx = azx - gcx; s_shadow[s_nshadow].vy = azy - gcy;
                 s_shadow[s_nshadow].d = shd; s_nshadow++;
             }
         }
@@ -446,9 +456,12 @@ static uint16_t ball_base(uint8_t id) {
 }
 /* Sample the ball's surface colour for a ball-local unit normal. */
 static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
-    /* Cue ball: a red spot so the spin is visible. */
+    /* Cue ball: a "measles" spotted ball — six small red dots, one centred on
+     * each axis pole (±x, ±y, ±z), so spin reads clearly however it rolls. */
     if (id == CUE_ID_CUE) {
-        if (nb.x > 0.86f) return RGB565C(210, 40, 40);
+        float ax = fabsf(nb.x), ay = fabsf(nb.y), az = fabsf(nb.z);
+        float m = ax > ay ? (ax > az ? ax : az) : (ay > az ? ay : az);
+        if (m > 0.93f) return RGB565C(210, 40, 40);   /* near a pole → dot */
         return base;
     }
     if (s_is_snooker) return base;              /* snooker balls are unmarked */
@@ -547,8 +560,10 @@ static void draw_ball(uint16_t *fb, uint16_t *depth, const Sprite *sp,
                     if (si > thr) { float h = (si - thr) / (1.0f - thr); refl += h*h; }
                 }
                 if (refl > 1.0f) refl = 1.0f;
-                int hi = (int)(refl * 31.0f * gain);
-                if (hi > 0) col = add565(col, hi, hi, hi);
+                /* lamp reflections are neutral white, NOT a brighter shade of
+                 * the ball — blend toward pure white so every ball shows the
+                 * same white dots (no pink/coloured tinge). */
+                if (refl > 0.0f) col = mix565(col, RGB565C(255,255,255), refl * gain);
                 break;
             }
             }
@@ -584,22 +599,39 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
                 t->x2, t->y2, t->d2, t->color, y0, y1);
     }
 
-    /* soft shadows (dark, depth-tested at cloth) */
+    /* soft ground-plane shadow decals lying flat on the cloth. Each is an
+     * ellipse C + s*U + t*V (|(s,t)|<=1) where U,V are the screen projections
+     * of world +X/+Z offsets, so it foreshortens with the table and spreads
+     * toward the camera (stays visible at the low aim-cam). We invert the 2×2
+     * [U V] per pixel to recover (s,t) and fade darkness from centre to edge. */
     for (int i = 0; i < s_nshadow; i++) {
-        int rad = (int)s_shadow[i].rad;
-        int cx = (int)s_shadow[i].cx, cy = (int)s_shadow[i].cy;
-        uint16_t d = s_shadow[i].d;
-        for (int py = cy - rad / 2; py <= cy + rad / 2; py++) {
+        float cx = s_shadow[i].cx, cy = s_shadow[i].cy;
+        float ux = s_shadow[i].ux, uy = s_shadow[i].uy;
+        float vx = s_shadow[i].vx, vy = s_shadow[i].vy;
+        float det = ux * vy - uy * vx;
+        if (det > -1e-4f && det < 1e-4f) continue;
+        float inv = 1.0f / det;
+        int bx = (int)(fabsf(ux) + fabsf(vx)) + 1;   /* screen bounding box */
+        int by = (int)(fabsf(uy) + fabsf(vy)) + 1;
+        int x0 = (int)cx - bx, x1b = (int)cx + bx;
+        int yy0 = (int)cy - by, yy1 = (int)cy + by;
+        for (int py = yy0; py <= yy1; py++) {
             if (py < y0 || py >= y1 || py < 0 || py >= CUE_FB_H) continue;
-            float vv = (py - cy) / (0.55f * rad + 0.01f);
             uint16_t *frow = fb + py * R3D_FB_W;
             uint16_t *drow = depth + py * R3D_FB_W;
-            for (int px = cx - rad; px <= cx + rad; px++) {
+            float ry = py - cy;
+            for (int px = x0; px <= x1b; px++) {
                 if (px < 0 || px >= CUE_FB_W) continue;
-                float uu = (px - cx) / (float)(rad + 0.01f);
-                if (uu * uu + vv * vv > 1.0f) continue;
-                if (d < drow[px]) continue;        /* behind table */
-                frow[px] = shade565(frow[px], 0.55f);
+                float rx = px - cx;
+                float s = ( rx * vy - ry * vx) * inv;
+                float t = (-rx * uy + ry * ux) * inv;
+                float r2 = s * s + t * t;
+                if (r2 > 1.0f) continue;
+                /* soft penumbra: darkest (×0.5) at centre, fading to none at the
+                 * rim. No depth test — drawn after the cloth, before the balls,
+                 * so balls correctly occlude it (refl1 look). */
+                float k = 0.5f + 0.5f * r2 * r2;
+                frow[px] = shade565(frow[px], k);
             }
         }
     }

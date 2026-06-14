@@ -40,6 +40,7 @@ void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
     r->kind = (t->kind == CUE_GAME_SNOOKER) ? 1 : 0;
     r->cpu = cpu;
     r->turn = 0; r->winner = -1; r->open = 1; r->break_shot = 1;
+    r->shots_remaining = 1; r->two_shot = 0; r->free_shot = 0;
     if (r->kind) {
         r->target = 0; r->reds_left = 15;
         /* colour spots by value 2..7 */
@@ -117,12 +118,24 @@ static void resolve_pool(CueRules *r, CueBall *b, int n, int first_hit,
     }
 
     if (foul) {
-        r->turn = 1 - r->turn; r->ball_in_hand = 1;
-        snprintf(r->msg, sizeof r->msg, "FOUL: %s", why);
+        /* UK two-shot rule: opponent gets two visits; the cue ball stays put
+         * unless it was potted (scratch → ball in hand behind the line). */
+        r->turn = 1 - r->turn;
+        r->two_shot = 1; r->shots_remaining = 2; r->free_shot = 1;
+        r->ball_in_hand = scratch ? 1 : 0;
+        snprintf(r->msg, sizeof r->msg, "FOUL: %s", why);   /* HUD shows 2 SHOTS */
     } else if (legal_pot) {
+        /* potting your own ball cancels any two-shot advantage carried in */
+        r->two_shot = 0; r->shots_remaining = 1; r->free_shot = 0;
         r->msg[0] = 0;                              /* same player continues */
+    } else if (r->shots_remaining > 1) {
+        /* missed but still holding a shot from the carry — play on, same player */
+        r->shots_remaining--; r->free_shot = 0;
+        snprintf(r->msg, sizeof r->msg, "2ND SHOT");
     } else {
-        r->turn = 1 - r->turn; r->msg[0] = 0;
+        r->turn = 1 - r->turn;
+        r->two_shot = 0; r->shots_remaining = 1; r->free_shot = 0;
+        r->msg[0] = 0;
     }
     r->break_shot = 0;
 }
@@ -224,6 +237,8 @@ void cue_rules_status(const CueRules *r, char *buf, int cap) {
         snprintf(buf, cap, "ON %s", on);
     } else {
         int g = r->group[r->turn];
-        snprintf(buf, cap, "%s", r->open ? "8-BALL: OPEN" : g == 1 ? "SOLIDS" : "STRIPES");
+        const char *grp = r->open ? "OPEN" : g == 1 ? "SOLIDS" : "STRIPES";
+        if (r->shots_remaining > 1) snprintf(buf, cap, "%s  2 SHOTS", grp);
+        else                        snprintf(buf, cap, "%s", grp);
     }
 }
