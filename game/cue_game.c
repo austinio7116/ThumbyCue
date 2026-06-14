@@ -300,6 +300,8 @@ void cue_game_draw_overlay(uint16_t *fb) {
                      : (s_state == GS_BACKSWING) ? "DN DRAW  RLS A FIRE"
                                                  : "HOLD A  RB FINE";
     craft_font_draw(fb, hint, 30, 119, RGB565C(180,180,180));
-    snprintf(buf, sizeof buf, "%dMS", (int)(s_frame_ms + 0.5f));
-    craft_font_draw(fb, buf, 100, 3, RGB565C(150,150,160));
+    int fps = (s_frame_ms > 0.1f) ? (int)(1000.0f / s_frame_ms + 0.5f) : 0;
+    if (fps > 999) fps = 999;
+    snprintf(buf, sizeof buf, "%dFPS", fps);
+    craft_font_draw(fb, buf, 98, 3, RGB565C(150,150,160));
 }

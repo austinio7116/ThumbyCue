@@ -34,4 +34,7 @@ void cue_render_raster(uint16_t *fb, int y0, int y1);
 /* Project a world point with the current view. Returns 0 if behind near. */
 int cue_render_project(Vec3 world, float *sx, float *sy, uint16_t *d);
 
+/* Ball lighting style: 0 smooth, 1 hard, 2 toon, 3 gloss. */
+void cue_render_set_light_mode(int m);
+
 #endif

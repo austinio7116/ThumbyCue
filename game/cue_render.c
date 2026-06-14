@@ -17,6 +17,7 @@ typedef struct { Vec3 v[3]; Vec3 nrm; uint16_t color; } CueTri;
 static CueTri   s_tab[MAX_TABLE_TRI];
 static int      s_ntab;
 static uint16_t s_cloth, s_bg_top, s_bg_bot;
+static uint16_t s_cloth_shadow;  /* dark cloth tint for ball shadow-side bounce */
 static float    s_ballR = 0.0286f;
 static int      s_is_snooker;   /* ids 1..15 mean reds, not solids/stripes */
 
@@ -55,6 +56,19 @@ static inline uint16_t add565(uint16_t c, int ar, int ag, int ab) {
     int b = (c & 0x1F) + ab;         if (b > 31) b = 31;
     return (uint16_t)((r << 11) | (g << 5) | b);
 }
+/* Blend a→b by t in [0,1]. */
+static inline uint16_t mix565(uint16_t a, uint16_t b, float t) {
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    int ar = (a>>11)&0x1F, ag = (a>>5)&0x3F, ab = a&0x1F;
+    int br = (b>>11)&0x1F, bg = (b>>5)&0x3F, bb = b&0x1F;
+    int rr = ar + (int)((br-ar)*t), gg = ag + (int)((bg-ag)*t), bl = ab + (int)((bb-ab)*t);
+    return (uint16_t)((rr<<11)|(gg<<5)|bl);
+}
+
+/* Ball lighting style (0=smooth/current, 1=hard spec, 2=toon, 3=gloss). */
+static int s_light_mode = 1;
+void cue_render_set_light_mode(int m) { s_light_mode = m; }
 
 int cue_render_project(Vec3 world, float *sx, float *sy, uint16_t *d) {
     Vec3 rel = v3_sub(world, s_view.pos);
@@ -96,6 +110,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     s_cloth = t->cloth;
     s_ballR = t->R;
     s_is_snooker = (t->kind == CUE_GAME_SNOOKER);
+    s_cloth_shadow = shade565(t->cloth, 0.42f);   /* cloth bounce tint */
     s_bg_top = RGB565C(24, 26, 36);
     s_bg_bot = RGB565C(6, 7, 12);
     const float hl = t->half_len, hw = t->half_wid;
@@ -133,27 +148,29 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
          * share an endpoint, so adjacent cushion tops share their back vertices
          * — a continuous strip with no V-gaps (the "holes in the top"). */
         Vec3 na = sg->n, nb = sg->n;
+        int sharedA = 0, sharedB = 0;
         if (s > 0) {
             const CueSeg *pr = &w->seg[s-1];
-            if (v3_len2(v3_sub(pr->b, sg->a)) < 1e-8f) na = v3_norm(v3_add(sg->n, pr->n));
+            if (v3_len2(v3_sub(pr->b, sg->a)) < 1e-8f) { na = v3_norm(v3_add(sg->n, pr->n)); sharedA = 1; }
         }
         if (s < w->nseg - 1) {
             const CueSeg *nx = &w->seg[s+1];
-            if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) nb = v3_norm(v3_add(sg->n, nx->n));
+            if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) { nb = v3_norm(v3_add(sg->n, nx->n)); sharedB = 1; }
         }
-        /* Force the back offset (node − n·cw) to go AWAY from the table centre,
-         * so a cushion top can never flap into the pocket — symmetric by
-         * construction regardless of segment orientation. */
+        /* Force the back offset to go AWAY from the table centre (symmetric). */
         if (na.x * sg->a.x + na.z * sg->a.z > 0.0f) na = v3_scale(na, -1.0f);
         if (nb.x * sg->b.x + nb.z * sg->b.z > 0.0f) nb = v3_scale(nb, -1.0f);
-        Vec3 n = sg->n;                        /* inward (toward play) */
-        /* base set back from the nose toward the rail (overhang) */
-        Vec3 ba = v3(sg->a.x - n.x*ub, 0, sg->a.z - n.z*ub);
-        Vec3 bb = v3(sg->b.x - n.x*ub, 0, sg->b.z - n.z*ub);
+        /* At an OPEN chain-end tip (a facing tip in the pocket throat) the back
+         * offset points outward = INTO the void, which made a green nub. Zero
+         * the offset there so the cushion ends with a clean vertical face. */
+        float uba = sharedA ? ub : 0.0f, ubb = sharedB ? ub : 0.0f;
+        float cwa = sharedA ? cw : 0.0f, cwb = sharedB ? cw : 0.0f;
+        Vec3 ba = v3(sg->a.x - na.x*uba, 0, sg->a.z - na.z*uba);
+        Vec3 bb = v3(sg->b.x - nb.x*ubb, 0, sg->b.z - nb.z*ubb);
         Vec3 an = v3(sg->a.x, nose_h, sg->a.z), bn = v3(sg->b.x, nose_h, sg->b.z);
         Vec3 af = v3(sg->a.x, flat_h, sg->a.z), bf = v3(sg->b.x, flat_h, sg->b.z);
-        Vec3 ar = v3(sg->a.x - na.x*cw, rail_h, sg->a.z - na.z*cw);
-        Vec3 br = v3(sg->b.x - nb.x*cw, rail_h, sg->b.z - nb.z*cw);
+        Vec3 ar = v3(sg->a.x - na.x*cwa, rail_h, sg->a.z - na.z*cwa);
+        Vec3 br = v3(sg->b.x - nb.x*cwb, rail_h, sg->b.z - nb.z*cwb);
         quad(ba, bb, bn, an, fdark);           /* undercut face (leans to nose) */
         quad(an, bn, bf, af, face);            /* small flat above the nose */
         quad(af, bf, br, ar, ctop);            /* cloth top → rail (continuous) */
@@ -451,15 +468,34 @@ static void draw_ball(uint16_t *fb, uint16_t *depth, const Sprite *sp,
             Vec3 Nv = v3(u, -v, -nz);
             Vec3 Nw = m3_mul_v3(&s_view.basis, Nv);     /* view→world */
             float diff = v3_dot(Nw, s_light); if (diff < 0) diff = 0;
-            float lum = 0.30f + 0.70f * diff;
-            lum *= 0.78f + 0.22f * nz;                  /* gentle rim falloff */
+            float s = v3_dot(Nw, H); if (s < 0) s = 0;  /* specular base */
+            float down = -Nw.y; if (down < 0) down = 0; /* underside (faces cloth) */
             Vec3 Nb = m3_mul_v3_t(&sp->orient, Nw);     /* world→ball-local */
-            uint16_t col = shade565(ball_sample(sp->id, Nb, base), lum);
-            float s = v3_dot(Nw, H);
-            if (s > 0.0f) {
-                s *= s; s *= s; s *= s;                 /* ^8 highlight */
-                int hi = (int)(s * 26.0f);
-                if (hi > 0) col = add565(col, hi, hi * 2, hi);
+            uint16_t bc = ball_sample(sp->id, Nb, base);
+            uint16_t col;
+            switch (s_light_mode) {
+            case 0:  /* SMOOTH (original soft look) */
+                col = shade565(bc, (0.30f + 0.70f*diff) * (0.78f + 0.22f*nz));
+                { float ss = s; ss*=ss; ss*=ss; ss*=ss; int hi=(int)(ss*26.0f);
+                  if (hi>0) col = add565(col, hi, hi*2, hi); }
+                break;
+            case 2:  /* TOON: banded diffuse + cloth shadow + crisp dot */
+                col = shade565(bc, diff>0.62f?1.0f : diff>0.30f?0.74f : 0.52f);
+                col = mix565(col, s_cloth_shadow, (1.0f-diff)*0.40f + down*0.22f);
+                if (s > 0.82f) col = RGB565C(250,250,250);
+                break;
+            case 3:  /* GLOSS: smooth body, strong cloth tint, sharp hotspot */
+                col = shade565(bc, 0.30f + 0.70f*diff);
+                col = mix565(col, s_cloth_shadow, (1.0f-diff)*0.50f + down*0.40f);
+                if (s > 0.60f) { float h=(s-0.60f)*2.5f; h*=h*h; int hi=(int)(h*30.0f);
+                  if (hi>0) col = add565(col, hi, hi, hi); }
+                break;
+            default: /* 1 HARD: punchy diffuse, cloth shadow tint, tight hotspot */
+                col = shade565(bc, 0.34f + 0.66f*diff);
+                col = mix565(col, s_cloth_shadow, (1.0f-diff)*0.34f + down*0.26f);
+                if (s > 0.72f) { float h=(s-0.72f)*3.57f; h*=h; int hi=(int)(h*31.0f);
+                  if (hi>0) col = add565(col, hi, hi, hi); }
+                break;
             }
             frow[px] = col;
             drow[px] = d;

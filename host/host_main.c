@@ -13,6 +13,7 @@
 #include <string.h>
 #include "cue_types.h"
 #include "cue_game.h"
+#include "cue_render.h"
 #include "craft_buttons.h"
 
 #define SCALE 5
@@ -59,6 +60,8 @@ int main(int argc, char **argv) {
                    &p[0],&p[1],&p[2],&p[3],&p[4],&p[5],&p[6]);
             cue_game_debug_cam(p[0],p[1],p[2],p[3],p[4],p[5],p[6]);
         }
+        const char *lm = getenv("CUE_LIGHT");
+        if (lm) cue_render_set_light_mode(atoi(lm));
         if (getenv("CUE_OVERHEAD")) {           /* tap LB once to toggle */
             b.lb = 1; cue_game_tick(&b, 1.0f / 60.0f); b.lb = 0;
         }
