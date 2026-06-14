@@ -163,9 +163,6 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
     /* FREE-LOOK (LB while aiming): roam the table — orbit/pitch/zoom + pan (hold
      * B) — purely to inspect. No aiming. A or LB returns to the down-the-cue view. */
     if ((s_state == GS_AIM || s_state == GS_BACKSWING) && !cpu_turn) {
-        if (!s_freelook && jp(b->lb, s_prev.lb)) {
-            s_freelook = 1; s_fl_az = s_view_az; s_look = v3(0, s_table.R, 0);
-        }
         if (s_freelook) {
             if (jp(b->a, s_prev.a) || jp(b->lb, s_prev.lb)) { s_freelook = 0; return; }
             if (b->b) {                                  /* pan the look-at point */
@@ -191,6 +188,10 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
                 if (s_fl_el<0) s_fl_el=0; if (s_fl_el>1) s_fl_el=1;
             }
             return;                                      /* no aiming while looking */
+        }
+        if (jp(b->lb, s_prev.lb)) {                      /* enter free-look */
+            s_freelook = 1; s_fl_az = s_view_az; s_look = v3(0, s_table.R, 0);
+            return;
         }
     }
 
