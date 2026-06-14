@@ -12,8 +12,8 @@
 
 /* ---- static table mesh (world space) ---------------------------------- */
 typedef struct { Vec3 v[3]; Vec3 nrm; uint16_t color; } CueTri;
-#define MAX_TABLE_TRI 560
-#define MAX_STRI      980      /* near-clipping can split a tri into two */
+#define MAX_TABLE_TRI 760
+#define MAX_STRI      1300     /* near-clipping can split a tri into two */
 static CueTri   s_tab[MAX_TABLE_TRI];
 static int      s_ntab;
 static uint16_t s_cloth, s_bg_top, s_bg_bot;
@@ -118,8 +118,15 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     /* Cushions from the chain segments: steep cloth playing face up to the
      * nose, then a cloth top sloping back to the cushion back. The facings
      * (which splay outward) shape the jaws automatically. */
-    uint16_t face = shade565(t->cloth, 0.66f);
-    uint16_t ctop = shade565(t->cloth, 0.90f);
+    /* Cushion cross-section (K66-ish): from the bed it leans FORWARD up to the
+     * protruding nose (the contact line at ~nose_h), a small vertical flat just
+     * above the nose, then the cloth top slopes back to the rail. The base is
+     * set back from the nose by `ub` so the nose overhangs (the "cut in below"). */
+    uint16_t fdark = shade565(t->cloth, 0.55f);   /* undercut face (in shadow) */
+    uint16_t face  = shade565(t->cloth, 0.72f);   /* the nose flat */
+    uint16_t ctop  = shade565(t->cloth, 0.92f);   /* cloth top to the rail */
+    const float flat_h = nose_h * 1.30f;          /* top of the small flat */
+    const float ub = 0.45f * t->R;                /* undercut / overhang */
     for (int s = 0; s < w->nseg; s++) {
         const CueSeg *sg = &w->seg[s];
         /* Per-NODE back normal: average with the neighbouring segment when they
@@ -139,12 +146,17 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
          * construction regardless of segment orientation. */
         if (na.x * sg->a.x + na.z * sg->a.z > 0.0f) na = v3_scale(na, -1.0f);
         if (nb.x * sg->b.x + nb.z * sg->b.z > 0.0f) nb = v3_scale(nb, -1.0f);
-        Vec3 a0 = v3(sg->a.x, 0, sg->a.z), b0 = v3(sg->b.x, 0, sg->b.z);
+        Vec3 n = sg->n;                        /* inward (toward play) */
+        /* base set back from the nose toward the rail (overhang) */
+        Vec3 ba = v3(sg->a.x - n.x*ub, 0, sg->a.z - n.z*ub);
+        Vec3 bb = v3(sg->b.x - n.x*ub, 0, sg->b.z - n.z*ub);
         Vec3 an = v3(sg->a.x, nose_h, sg->a.z), bn = v3(sg->b.x, nose_h, sg->b.z);
+        Vec3 af = v3(sg->a.x, flat_h, sg->a.z), bf = v3(sg->b.x, flat_h, sg->b.z);
         Vec3 ar = v3(sg->a.x - na.x*cw, rail_h, sg->a.z - na.z*cw);
         Vec3 br = v3(sg->b.x - nb.x*cw, rail_h, sg->b.z - nb.z*cw);
-        quad(a0, b0, bn, an, face);            /* steep playing face (the jaw) */
-        quad(an, bn, br, ar, ctop);            /* cloth top → rail (continuous) */
+        quad(ba, bb, bn, an, fdark);           /* undercut face (leans to nose) */
+        quad(an, bn, bf, af, face);            /* small flat above the nose */
+        quad(af, bf, br, ar, ctop);            /* cloth top → rail (continuous) */
     }
 
     /* Wood rail frame: full rectangular ring (the pocket caps punch holes
