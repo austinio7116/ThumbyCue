@@ -177,8 +177,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             float ml = sqrtf(m.x * m.x + m.z * m.z);
             Vec3 din = (ml > 1e-5f) ? v3(-m.x / ml, 0, -m.z / ml) : v3(0, 0, 0);
             float chord = sqrtf((b.x-a.x)*(b.x-a.x) + (b.z-a.z)*(b.z-a.z));
-            int straight = !t->pocket_round;           /* US mitred pockets */
-            float blg = straight ? 0.0f : chord * 0.32f;  /* straight chord vs curved arc */
+            float blg = chord * 0.32f;                 /* curved mouth arc (same for all) */
             Vec3 c = v3(m.x + din.x * blg * 2.0f, 0, m.z + din.z * blg * 2.0f);
             const int N = 6;
             Vec3 arc[N + 1]; arc[0] = a;
@@ -189,11 +188,12 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                 tri(v3(0, 0, 0), arc[k-1], p, t->cloth);
                 arc[k] = p;
             }
-            /* Curved baize lip: roll the cloth down into the pocket from the
-             * MOUTH ARC. ONLY for rounded (UK/snooker) pockets — a mitred US
-             * pocket must keep a SHARP straight edge (no rolled cloth), so skip
-             * the lip there. */
-            if (s_lip_mode && !straight) {
+            /* Baize lip: roll the cloth down into the pocket throat (needed for
+             * the ball-drop). Curved pockets roll toward the round centre; mitred
+             * (US) pockets roll straight back. The lip lives in the open mouth —
+             * the cushions are drawn AFTER and depth-occlude it on the sides, so
+             * it never overlaps the mitre. */
+            if (s_lip_mode) {
                 int pidx = 0; float bestp = 1e9f;
                 for (int q = 0; q < w->npocket; q++) {
                     float dx = w->pocket[q].x - m.x, dz = w->pocket[q].z - m.z;
@@ -215,12 +215,9 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                     uint16_t col = shade565(t->cloth, 1.0f - 0.5f*(1.0f - cosf(phi)));
                     Vec3 ring1[N + 1];
                     for (int k = 0; k <= N; k++) {
-                        /* curved pockets roll toward the round pocket centre;
-                         * mitred (US) pockets roll straight back (uniform
-                         * outward) so the lip stays a straight chamfer. */
-                        float dx, dz;
-                        if (straight) { dx = -din.x; dz = -din.z; }
-                        else { dx = pc.x - arc[k].x; dz = pc.z - arc[k].z; }
+                        /* roll the cloth toward the pocket centre (same drop for
+                         * every table — only the cushion differs) */
+                        float dx = pc.x - arc[k].x, dz = pc.z - arc[k].z;
                         float l = sqrtf(dx*dx + dz*dz) + 1e-6f;
                         ring1[k] = v3(arc[k].x + dx/l*off, yy, arc[k].z + dz/l*off);
                     }
