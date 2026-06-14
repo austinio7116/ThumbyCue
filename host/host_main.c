@@ -14,10 +14,15 @@
 #include "cue_types.h"
 #include "cue_game.h"
 #include "cue_render.h"
+#include "cue_audio.h"
 #include "craft_buttons.h"
 
 #define SCALE 5
 static uint16_t g_fb[CUE_FB_W * CUE_FB_H];
+
+static void audio_cb(void *ud, Uint8 *stream, int len) {
+    (void)ud; cue_audio_render((int16_t *)stream, len / (int)sizeof(int16_t));
+}
 
 static void render_frame(void) {
     cue_game_render_begin();
@@ -48,7 +53,7 @@ int main(int argc, char **argv) {
     }
 
     cue_game_init(0x1234u);
-    cue_game_set_kind(snooker);
+    if (!getenv("CUE_MENU")) cue_game_set_kind(snooker);   /* CUE_MENU: stay on title */
 
     const char *shot = getenv("CUE_SHOT");
     if (shot) {
@@ -73,10 +78,14 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+    SDL_AudioSpec want; memset(&want, 0, sizeof want);
+    want.freq = 22050; want.format = AUDIO_S16SYS; want.channels = 1;
+    want.samples = 512; want.callback = audio_cb;
+    SDL_OpenAudio(&want, NULL); SDL_PauseAudio(0);
     SDL_Window *win = SDL_CreateWindow("ThumbyCue",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         CUE_FB_W * SCALE, CUE_FB_H * SCALE, 0);

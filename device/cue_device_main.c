@@ -14,8 +14,10 @@
 #include "craft_lcd_gc9107.h"
 #include "craft_buttons.h"
 #include "craft_rumble.h"
+#include "craft_audio_pwm.h"
 #include "cue_types.h"
 #include "cue_game.h"
+#include "cue_audio.h"
 
 static uint16_t g_fb[CUE_FB_W * CUE_FB_H];
 
@@ -39,6 +41,7 @@ int main(void) {
     craft_lcd_present(g_fb);
     craft_buttons_init();
     craft_rumble_init();
+    craft_audio_pwm_init();
 
     cue_game_init(get_rand_32());
 
@@ -55,6 +58,16 @@ int main(void) {
 
         cue_game_tick(&btn, dt);
         craft_rumble_tick(dt);
+
+        /* keep the PWM audio ring fed */
+        int room = craft_audio_pwm_room();
+        while (room > 0) {
+            int16_t abuf[128];
+            int nn = room < 128 ? room : 128;
+            cue_audio_render(abuf, nn);
+            craft_audio_pwm_push(abuf, nn);
+            room -= nn;
+        }
 
         uint64_t t0 = to_us_since_boot(get_absolute_time());
         cue_game_render_begin();                     /* core0: build draw list */

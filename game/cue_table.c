@@ -55,10 +55,10 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->cushion_h = 1.27f * t->R;
         t->rail_w = 0.085f;
         t->pocket_round = 1;
-        t->pr_corner  = 1.85f * t->R;
-        t->pr_side    = 1.70f * t->R;
-        t->gap_corner = 2.30f * t->R;
-        t->gap_side   = 2.05f * t->R;
+        t->pr_corner  = 1.98f * t->R;   /* loosened slightly */
+        t->pr_side    = 1.82f * t->R;
+        t->gap_corner = 2.45f * t->R;
+        t->gap_side   = 2.18f * t->R;
         t->facing_len = 1.25f * t->R;
         t->ang_corner = 60.0f;          /* steeper = rounder mouth */
         t->ang_side   = 80.0f;

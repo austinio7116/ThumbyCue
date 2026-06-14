@@ -28,11 +28,14 @@ add_executable(thumbycue
     ${DEVICE}/craft_lcd_gc9107.c
     ${DEVICE}/craft_buttons.c
     ${DEVICE}/craft_rumble.c
+    ${DEVICE}/craft_audio_pwm.c
 
     ${GAME}/cue_game.c
     ${GAME}/cue_render.c
     ${GAME}/cue_physics.c
     ${GAME}/cue_table.c
+    ${GAME}/cue_rules.c
+    ${GAME}/cue_audio.c
     ${GAME}/r3d_raster.c
     ${GAME}/craft_font.c
 )
