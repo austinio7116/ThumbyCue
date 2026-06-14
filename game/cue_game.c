@@ -50,6 +50,7 @@ static int   s_aim_dir;
 static float s_cam_pitch  = 0.45f; /* 0 = low/level … 1 = high/steep */
 static float s_cam_dist_z = 0.50f; /* 0 = far/wide … 1 = close/zoomed-in */
 static int   s_overhead;
+static Vec3  s_orbit_c;            /* fixed camera-orbit centre during a shot */
 static float s_power, s_tip_side, s_tip_vert;
 static CraftRawButtons s_prev;
 static float s_frame_ms;
@@ -100,6 +101,7 @@ static void begin_shot(void) {
                     s_tip_side, s_tip_vert);
     s_world._acc = 0.0f;
     s_world.first_hit = -1;            /* physics records the cue's real first contact */
+    s_orbit_c = cue_pos();             /* camera stays put here during the shot (no follow) */
     s_first_hit = -1; s_cushion_seen = 0;
     for (int i = 0; i < s_n; i++) s_was_on[i] = s_balls[i].on;
     cue_audio_sfx(CUE_SFX_STRIKE, s_power);
@@ -369,7 +371,9 @@ static void build_view(CueView *v) {
         v->pos=cam; v->basis.r[0]=right; v->basis.r[1]=up; v->basis.r[2]=fwd;
         return;
     }
-    Vec3 P = cue_pos();
+    /* During a shot the camera orbits a FIXED point (where the cue ball was
+     * struck) — no auto-follow; the player rotates/zooms with the controls. */
+    Vec3 P = (s_state == GS_SHOOTING) ? s_orbit_c : cue_pos();
     Vec3 dir = v3(cosf(s_view_az),0,sinf(s_view_az));
     if (s_overhead) {
         float focal=64.0f/tanf(v->fov_deg*DEG2RAD*0.5f);
