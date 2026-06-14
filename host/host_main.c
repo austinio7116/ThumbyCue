@@ -62,6 +62,7 @@ int main(int argc, char **argv) {
         }
         const char *lm = getenv("CUE_LIGHT");
         if (lm) cue_render_set_light_mode(atoi(lm));
+        if (getenv("CUE_BALLTEST")) cue_game_debug_spread();
         if (getenv("CUE_OVERHEAD")) {           /* tap LB once to toggle */
             b.lb = 1; cue_game_tick(&b, 1.0f / 60.0f); b.lb = 0;
         }

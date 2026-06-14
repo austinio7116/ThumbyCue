@@ -39,7 +39,7 @@ static struct { float cx, cy, rad; uint16_t d; int on; } s_ghost;
 /* View globals used by the per-pixel pass. */
 static CueView s_view;
 static float   s_focal;
-static Vec3    s_light = { 0.35f, 0.92f, 0.18f };   /* toward the key light */
+static Vec3    s_light = { 0.10f, 0.975f, 0.20f };  /* nearly overhead (snooker lamps) */
 
 /* ---- helpers ----------------------------------------------------------- */
 static inline uint16_t shade565(uint16_t c, float s) {
@@ -104,6 +104,14 @@ static void tri(Vec3 a, Vec3 b, Vec3 c, uint16_t col) {
 static void quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col) {
     tri(a, b, c, col); tri(a, c, d, col);
 }
+/* Ribbon quad a→b→c→d with a CHOSEN diagonal. The cushion strip is non-planar
+ * (back verts use per-node normals), so the diagonal must follow the geometry,
+ * not the vertex labels — otherwise a jaw renders mirror-broken on one side.
+ * alt=0 splits a-c; alt=1 splits b-d. */
+static void ribbon(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col, int alt) {
+    if (alt) { tri(a, b, d, col); tri(b, c, d, col); }
+    else     { tri(a, b, c, col); tri(a, c, d, col); }
+}
 
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     s_ntab = 0;
@@ -127,7 +135,28 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     for (int i = 0; i < nb; i++) {
         Vec3 a = v3(w->jaw[i].x, 0, w->jaw[i].z);
         Vec3 b = v3(w->jaw[(i + 1) % nb].x, 0, w->jaw[(i + 1) % nb].z);
-        tri(v3(0, 0, 0), a, b, t->cloth);
+        /* Edges within a chain (i even) are the straight nose; edges ACROSS a
+         * pocket (i odd) are the mouth — cut it as a CURVED arc bulging toward
+         * the table so the pocket drop is rounded, not a straight chord. */
+        if (i & 1) {
+            Vec3 m = v3((a.x + b.x) * 0.5f, 0, (a.z + b.z) * 0.5f);
+            float ml = sqrtf(m.x * m.x + m.z * m.z);
+            Vec3 din = (ml > 1e-5f) ? v3(-m.x / ml, 0, -m.z / ml) : v3(0, 0, 0);
+            float chord = sqrtf((b.x-a.x)*(b.x-a.x) + (b.z-a.z)*(b.z-a.z));
+            float blg = chord * 0.32f;                 /* arc depth toward table */
+            Vec3 c = v3(m.x + din.x * blg * 2.0f, 0, m.z + din.z * blg * 2.0f);
+            const int N = 5;
+            Vec3 prev = a;
+            for (int k = 1; k <= N; k++) {
+                float tt = (float)k / N, o = 1.0f - tt;
+                Vec3 p = v3(o*o*a.x + 2*o*tt*c.x + tt*tt*b.x, 0,
+                            o*o*a.z + 2*o*tt*c.z + tt*tt*b.z);
+                tri(v3(0, 0, 0), prev, p, t->cloth);
+                prev = p;
+            }
+        } else {
+            tri(v3(0, 0, 0), a, b, t->cloth);
+        }
     }
 
     /* Cushions from the chain segments: steep cloth playing face up to the
@@ -157,9 +186,10 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             const CueSeg *nx = &w->seg[s+1];
             if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) { nb = v3_norm(v3_add(sg->n, nx->n)); sharedB = 1; }
         }
-        /* Force the back offset to go AWAY from the table centre (symmetric). */
-        if (na.x * sg->a.x + na.z * sg->a.z > 0.0f) na = v3_scale(na, -1.0f);
-        if (nb.x * sg->b.x + nb.z * sg->b.z > 0.0f) nb = v3_scale(nb, -1.0f);
+        /* na/nb are the cushion's inward normals (toward play); the back edge is
+         * node − n·cw, i.e. perpendicular away from the playing surface toward
+         * the rail — correct everywhere including corners. (No radial guard: at
+         * a corner "away from centre" points into the pocket and flapped the top.) */
         /* At an OPEN chain-end tip (a facing tip in the pocket throat) the back
          * offset points outward = INTO the void, which made a green nub. Zero
          * the offset there so the cushion ends with a clean vertical face. */
@@ -171,9 +201,12 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         Vec3 af = v3(sg->a.x, flat_h, sg->a.z), bf = v3(sg->b.x, flat_h, sg->b.z);
         Vec3 ar = v3(sg->a.x - na.x*cwa, rail_h, sg->a.z - na.z*cwa);
         Vec3 br = v3(sg->b.x - nb.x*cwb, rail_h, sg->b.z - nb.z*cwb);
-        quad(ba, bb, bn, an, fdark);           /* undercut face (leans to nose) */
-        quad(an, bn, bf, af, face);            /* small flat above the nose */
-        quad(af, bf, br, ar, ctop);            /* cloth top → rail (continuous) */
+        /* Choose the ribbon diagonal by which end is the tip so both jaws
+         * (opposite winding) render identically. alt when 'a' is the tip. */
+        int alt = !sharedA;
+        ribbon(ba, bb, bn, an, fdark, alt);    /* undercut face (leans to nose) */
+        quad(an, bn, bf, af, face);            /* small flat (planar) */
+        ribbon(af, bf, br, ar, ctop, alt);     /* cloth top → rail */
     }
 
     /* Wood rail frame: full rectangular ring (the pocket caps punch holes
@@ -305,13 +338,13 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
             sp->cx = sx; sp->cy = sy; sp->rad = rad; sp->viewz = vz;
             sp->orient = b->orient; sp->id = b->id;
         }
-        /* shadow: projected at the ball's contact point, flattened. */
+        /* shadow: directly UNDER the ball (lights are overhead, no side cast),
+         * larger + soft like a real table under big diffuse lamps. */
         float shx, shy; uint16_t shd;
-        if (cue_render_project(v3(b->pos.x + 0.4f * s_ballR, 0.0001f,
-                                  b->pos.z), &shx, &shy, &shd)) {
+        if (cue_render_project(v3(b->pos.x, 0.0001f, b->pos.z), &shx, &shy, &shd)) {
             if (s_nshadow < CUE_MAX_BALLS) {
                 s_shadow[s_nshadow].cx = shx; s_shadow[s_nshadow].cy = shy;
-                s_shadow[s_nshadow].rad = rad * 0.95f;
+                s_shadow[s_nshadow].rad = rad * 1.35f;
                 s_shadow[s_nshadow].d = shd; s_nshadow++;
             }
         }
@@ -447,6 +480,14 @@ static void draw_ball(uint16_t *fb, uint16_t *depth, const Sprite *sp,
     /* camera-to-surface dir (specular) and light, world space. */
     Vec3 vcam = v3_scale(s_view.basis.r[2], -1.0f);   /* toward camera */
     Vec3 H = v3_norm(v3_add(s_light, vcam));
+    /* Overhead fixture = 4 lamps in a 2×2 cluster → 4 sharp reflection dots.
+     * Each reflects where the surface normal ≈ that lamp's half-vector. */
+    const float lx = 0.42f, lz = 0.28f;   /* wide enough to read as 4 dots */
+    Vec3 Hl[4];
+    Hl[0] = v3_norm(v3_add(v3_norm(v3(s_light.x+lx, s_light.y, s_light.z+lz)), vcam));
+    Hl[1] = v3_norm(v3_add(v3_norm(v3(s_light.x-lx, s_light.y, s_light.z+lz)), vcam));
+    Hl[2] = v3_norm(v3_add(v3_norm(v3(s_light.x+lx, s_light.y, s_light.z-lz)), vcam));
+    Hl[3] = v3_norm(v3_add(v3_norm(v3(s_light.x-lx, s_light.y, s_light.z-lz)), vcam));
     float R = s_ballR;
     for (int py = icy - rad; py <= icy + rad; py++) {
         if (py < y0 || py >= y1 || py < 0 || py >= CUE_FB_H) continue;
@@ -490,12 +531,26 @@ static void draw_ball(uint16_t *fb, uint16_t *depth, const Sprite *sp,
                 if (s > 0.60f) { float h=(s-0.60f)*2.5f; h*=h*h; int hi=(int)(h*30.0f);
                   if (hi>0) col = add565(col, hi, hi, hi); }
                 break;
-            default: /* 1 HARD: punchy diffuse, cloth shadow tint, tight hotspot */
-                col = shade565(bc, 0.34f + 0.66f*diff);
-                col = mix565(col, s_cloth_shadow, (1.0f-diff)*0.34f + down*0.26f);
-                if (s > 0.72f) { float h=(s-0.72f)*3.57f; h*=h; int hi=(int)(h*31.0f);
-                  if (hi>0) col = add565(col, hi, hi, hi); }
+            case 4:  /* 4-DOT medium */
+            case 5:  /* 4-DOT large/soft */
+            default: /* 1 = 4-DOT sharp: polished ball reflecting the 4 overhead
+                      * lamps as crisp bright dots; saturated body, cloth-tinted
+                      * lower half. */
+            {
+                float thr = (s_light_mode==5) ? 0.93f : (s_light_mode==4) ? 0.955f : 0.975f;
+                float gain = (s_light_mode==5) ? 0.85f : 1.0f;
+                col = shade565(bc, 0.46f + 0.54f*diff);
+                col = mix565(col, s_cloth_shadow, (1.0f-diff)*0.40f + down*0.42f);
+                float refl = 0.0f;
+                for (int li = 0; li < 4; li++) {
+                    float si = v3_dot(Nw, Hl[li]);
+                    if (si > thr) { float h = (si - thr) / (1.0f - thr); refl += h*h; }
+                }
+                if (refl > 1.0f) refl = 1.0f;
+                int hi = (int)(refl * 31.0f * gain);
+                if (hi > 0) col = add565(col, hi, hi, hi);
                 break;
+            }
             }
             frow[px] = col;
             drow[px] = d;

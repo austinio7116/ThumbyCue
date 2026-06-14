@@ -61,6 +61,30 @@ void cue_game_init(uint32_t seed) {
 
 void cue_game_set_frame_ms(float ms) { s_frame_ms = ms; }
 
+/* Lay out individual balls spread on the cloth so the ball shading can be
+ * judged like the reference photo (white, a red, and the colours). */
+void cue_game_debug_spread(void) {
+    s_kind = 1;
+    cue_table_init(&s_table, CUE_GAME_SNOOKER);
+    cue_table_build_world(&s_table, &s_world);
+    cue_render_build_table(&s_table, &s_world);
+    memset(s_balls, 0, sizeof(s_balls));
+    float R = s_table.R;
+    const int ids[8] = { CUE_ID_CUE, 1, CUE_ID_YELLOW, CUE_ID_GREEN,
+                         CUE_ID_BROWN, CUE_ID_BLUE, CUE_ID_PINK, CUE_ID_BLACK };
+    int n = 0;
+    for (int i = 0; i < 8; i++) {
+        int row = i / 4, col = i % 4;
+        float x = (col - 1.5f) * 7.0f * R;
+        float z = (row - 0.5f) * 7.0f * R;
+        CueBall *b = &s_balls[n++];
+        b->pos = v3(x, R, z); b->orient = m3_identity();
+        b->on = 1; b->id = (uint8_t)ids[i];
+    }
+    s_n = n;
+    s_state = GS_AIM;
+}
+
 static Vec3 cue_pos(void) {
     return s_balls[0].on ? s_balls[0].pos : cue_table_cue_home(&s_table);
 }
