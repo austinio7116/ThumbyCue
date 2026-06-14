@@ -43,6 +43,21 @@ int main(void) {
               "hit own group, no pot -> no foul (turn passes)");
     }
 
+    /* (3a) THE REPORTED BUG: one solid left, hit AND pot it this shot. The
+     * group becomes empty only because of this shot, so it must NOT foul. */
+    for (int i = 0; i < n; i++)            /* leave exactly one solid (id 7) */
+        if (b[i].id >= 1 && b[i].id <= 6) b[i].on = 0;
+    {
+        CueRules rr = r;                   /* group 1, turn 0 */
+        CueBall bb[CUE_MAX_BALLS]; memcpy(bb, b, sizeof bb);
+        int pi = -1; for (int i = 0; i < n; i++) if (bb[i].id == 7) pi = i;
+        bb[pi].on = 0;                     /* potted the last solid this shot */
+        int potted[1] = { 7 }; int np = 1;
+        cue_rules_resolve(&rr, bb, n, &w, /*first_hit=*/7, 0, 1, potted, np);
+        CHECK(strstr(rr.msg, "FOUL") == NULL,
+              "pot your LAST group ball -> legal, no must-hit-8 foul");
+    }
+
     /* (3) clear all solids -> now the 8 is legal and required */
     for (int i = 0; i < n; i++) if (b[i].id >= 1 && b[i].id <= 7) b[i].on = 0;
     CHECK( cue_rules_ball_legal(&r, b, n, 8), "8 legal once group cleared");

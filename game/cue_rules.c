@@ -86,7 +86,12 @@ static void resolve_pool(CueRules *r, CueBall *b, int n, int first_hit,
         int g = pool_group(potted[k]);
         if (potted[k] == 8) eight = 1; else if (g == 1) low++; else if (g == 2) high++;
     }
-    int legal_pot = r->open ? (low || high) : (grp == 1 ? low : high);
+    int my_potted = (grp == 1) ? low : high;   /* own group balls potted THIS shot */
+    int legal_pot = r->open ? (low || high) : my_potted;
+    /* "on the 8" only if the group was cleared BEFORE this shot — i.e. it's
+     * empty now AND you didn't just pot a group ball this shot. Otherwise the
+     * shot that pots your last group ball would wrongly read as must-hit-8. */
+    int on_eight = !r->open && group_cleared(b, n, grp) && my_potted == 0;
 
     int foul = 0; const char *why = "";
     if (scratch)            { foul = 1; why = "SCRATCH"; }
@@ -94,8 +99,8 @@ static void resolve_pool(CueRules *r, CueBall *b, int n, int first_hit,
     else {
         int fg = pool_group(first_hit);
         if (!r->open) {
-            if (group_cleared(b, n, grp)) { if (first_hit != 8) { foul = 1; why = "MUST HIT 8"; } }
-            else if (fg != grp)           { foul = 1; why = "WRONG BALL"; }
+            if (on_eight) { if (first_hit != 8) { foul = 1; why = "MUST HIT 8"; } }
+            else if (fg != grp) { foul = 1; why = "WRONG BALL"; }   /* incl. hitting the 8 early */
         } else if (first_hit == 8)        { foul = 1; why = "HIT 8 FIRST"; }
     }
     (void)cushion;
@@ -105,7 +110,8 @@ static void resolve_pool(CueRules *r, CueBall *b, int n, int first_hit,
         if (r->break_shot) {                       /* re-spot, no result */
             respot_eight(b, n);
         } else {
-            int win = !foul && !scratch && !r->open && group_cleared(b, n, grp);
+            /* legal win only if the group was clear BEFORE potting the 8 */
+            int win = !foul && !scratch && on_eight;
             r->frame_over = 1; r->winner = win ? r->turn : (1 - r->turn);
             snprintf(r->msg, sizeof r->msg, win ? "FRAME WON!" : "FOUL ON 8");
             return;

@@ -12,8 +12,8 @@
 
 /* ---- static table mesh (world space) ---------------------------------- */
 typedef struct { Vec3 v[3]; Vec3 nrm; uint16_t color; } CueTri;
-#define MAX_TABLE_TRI 760
-#define MAX_STRI      1300     /* near-clipping can split a tri into two */
+#define MAX_TABLE_TRI 1500
+#define MAX_STRI      2400     /* near-clipping can split a tri into two */
 static CueTri   s_tab[MAX_TABLE_TRI];
 static int      s_ntab;
 static int      s_bed_ntab;   /* first s_bed_ntab tris are the flat cloth bed */
@@ -254,8 +254,13 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * pocket (the half sitting over the wood frame) gets a flush rail-level cap
      * + a frame-thickness wall to punch the hole through the wood; the inward
      * (mouth) half is left open so nothing floats above the playing surface. */
-    uint16_t pk_wall = RGB565C(9, 11, 11), pk_floor = RGB565C(3, 4, 4);
-    const float cap_y = rail_h + 0.002f, floor_y = -0.055f;
+    uint16_t pk_wall = RGB565C(9, 11, 11);
+    /* Snooker: a deeper, dark-olive "net bag" pouch the potted ball drops into.
+     * Pool: a shallow near-black void. */
+    uint16_t pk_floor = s_is_snooker ? RGB565C(34, 30, 20) : RGB565C(3, 4, 4);
+    uint16_t pk_net   = s_is_snooker ? RGB565C(22, 20, 13) : RGB565C(6, 7, 7);
+    const float cap_y = rail_h + 0.002f;
+    const float floor_y = s_is_snooker ? -0.105f : -0.055f;
     for (int p = 0; p < w->npocket; p++) {
         float cx = w->pocket[p].x, cz = w->pocket[p].z;
         float r = (p < 4) ? t->pr_corner : t->pr_side;
@@ -275,7 +280,30 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             int over_frame = (fabsf(mx) > ibx || fabsf(mz) > ibz);
             Vec3 bed0 = v3(cx + r*c0, -0.002f, cz + r*s0);
             Vec3 bed1 = v3(cx + r*c1, -0.002f, cz + r*s1);
-            tri(floor_c, bed0, bed1, pk_floor);              /* recess cone floor */
+            if (s_is_snooker) {                              /* two-tone net pouch */
+                float midy = -0.05f, midr = r * 0.62f;
+                Vec3 m0 = v3(cx+midr*c0, midy, cz+midr*s0);
+                Vec3 m1 = v3(cx+midr*c1, midy, cz+midr*s1);
+                quad(bed0, bed1, m1, m0, pk_floor);          /* upper throat */
+                tri(floor_c, m0, m1, pk_net);                /* taper into the bag */
+            } else {
+                tri(floor_c, bed0, bed1, pk_floor);          /* shallow dark void */
+            }
+            if (!over_frame) {
+                /* curved baize lip: the cloth rolls smoothly (tight curve) down
+                 * over the pocket edge into the throat on the playing side. */
+                const int M = 3;
+                float pr = r, py = -0.0008f;
+                for (int s = 1; s <= M; s++) {
+                    float phi = (float)s / M * 1.5707963f;
+                    float rr = r - r * 0.34f * (1.0f - cosf(phi));
+                    float yy = -r * 0.52f * sinf(phi);
+                    uint16_t col = shade565(t->cloth, 1.0f - 0.5f * sinf(phi));
+                    quad(v3(cx+pr*c0, py, cz+pr*s0), v3(cx+pr*c1, py, cz+pr*s1),
+                         v3(cx+rr*c1, yy, cz+rr*s1), v3(cx+rr*c0, yy, cz+rr*s0), col);
+                    pr = rr; py = yy;
+                }
+            }
             if (over_frame) {
                 Vec3 top0 = v3(cx + r*c0, cap_y, cz + r*s0);
                 Vec3 top1 = v3(cx + r*c1, cap_y, cz + r*s1);
