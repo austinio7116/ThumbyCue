@@ -71,6 +71,18 @@ int main(int argc, char **argv) {
         if (getenv("CUE_OVERHEAD")) {           /* tap LB once to toggle */
             b.lb = 1; cue_game_tick(&b, 1.0f / 60.0f); b.lb = 0;
         }
+        if (getenv("CUE_AUTO")) {               /* scripted shots — crash/flow test */
+            int shots = atoi(getenv("CUE_AUTO"));
+            for (int s = 0; s < shots; s++) {
+                CraftRawButtons x; memset(&x, 0, sizeof x);   /* draw back */
+                x.a = 1; x.down = 1;
+                for (int i = 0; i < 45; i++) cue_game_tick(&x, 1.0f/60.0f);
+                memset(&x, 0, sizeof x);                       /* release = strike */
+                cue_game_tick(&x, 1.0f/60.0f);
+                for (int i = 0; i < 700; i++) cue_game_tick(&x, 1.0f/60.0f); /* settle + CPU */
+            }
+            printf("autoplay %d shots ok\n", shots);
+        }
         for (int i = 0; i < 30; i++) { cue_game_tick(&b, 1.0f / 60.0f); }
         render_frame();
         dump_ppm(shot);
