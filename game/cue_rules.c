@@ -51,6 +51,9 @@ void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
         r->spot[5] = v3(t->blue_x,  t->R, 0.0f);           /* blue   */
         r->spot[6] = v3(t->pink_x,  t->R, 0.0f);           /* pink   */
         r->spot[7] = v3(t->black_x, t->R, 0.0f);           /* black  */
+    } else if (t->kind == CUE_GAME_US9) {
+        r->spot[0] = v3(t->half_len * 0.5f, t->R, 0.0f);   /* foot spot — 9 respot */
+        r->seq = 1;                                        /* lowest ball on (HUD) */
     }
 }
 
@@ -226,18 +229,74 @@ static void resolve_snooker(CueRules *r, CueBall *b, int n, int first_hit,
     }
 }
 
+/* ---- US 9-ball ------------------------------------------------------- */
+static int nine_lowest(const CueBall *b, int n) {     /* lowest 1..9 on table */
+    int lo = 99;
+    for (int i = 0; i < n; i++)
+        if (b[i].on && b[i].id >= 1 && b[i].id <= 9 && b[i].id < lo) lo = b[i].id;
+    return lo == 99 ? 0 : lo;
+}
+static void respot_nine(CueRules *r, CueBall *b, int n) {
+    CueBall *q = find_ball(b, n, 9);
+    if (!q) return;
+    q->on = 1; q->vel = v3(0,0,0); q->w = v3(0,0,0);
+    q->pos = r->spot[0]; q->orient = m3_identity();
+}
+
+static void resolve_9ball(CueRules *r, CueBall *b, int n, int first_hit,
+                          int scratch, int cushion, const int *potted, int np) {
+    /* lowest ball at the START of the shot = min(still-on, potted-this-shot) */
+    int lowest = nine_lowest(b, n);
+    int nine_potted = 0;
+    for (int k = 0; k < np; k++) {
+        if (potted[k] == 9) nine_potted = 1;
+        if (lowest == 0 || potted[k] < lowest) lowest = potted[k];
+    }
+    if (lowest == 0) lowest = 1;
+
+    int foul = 0; const char *why = "";
+    if (scratch)                      { foul = 1; why = "SCRATCH"; }
+    else if (first_hit < 0)           { foul = 1; why = "NO BALL"; }
+    else if (first_hit != lowest)     { foul = 1; why = "WRONG BALL"; }   /* must hit lowest first */
+    else if (np == 0 && !cushion)     { foul = 1; why = "NO RAIL"; }      /* table scratch */
+
+    /* the 9: potted legally wins (incl. on the break); on a foul it respots */
+    if (nine_potted) {
+        if (!foul) { r->frame_over = 1; r->winner = r->turn;
+                     snprintf(r->msg, sizeof r->msg, "9-BALL!"); return; }
+        respot_nine(r, b, n);
+    }
+
+    if (foul) {
+        r->cfoul[r->turn]++;
+        if (r->cfoul[r->turn] >= 3) {           /* three consecutive fouls = loss */
+            r->frame_over = 1; r->winner = 1 - r->turn;
+            snprintf(r->msg, sizeof r->msg, "3 FOULS - LOSS"); return;
+        }
+        r->turn = 1 - r->turn; r->ball_in_hand = 1;
+        snprintf(r->msg, sizeof r->msg, "FOUL: %s", why);
+        r->break_shot = 0; r->seq = nine_lowest(b, n); return;
+    }
+    r->cfoul[r->turn] = 0;
+    if (np > 0) r->msg[0] = 0;                   /* potted legally → carry on */
+    else { r->turn = 1 - r->turn; r->msg[0] = 0; }
+    r->break_shot = 0; r->seq = nine_lowest(b, n);
+}
+
 void cue_rules_resolve(CueRules *r, CueBall *b, int n, const CueWorld *w,
                        int first_hit, int scratch, int cushion,
                        const int *potted, int np) {
     (void)w;
     r->ball_in_hand = 0;
-    if (r->kind) resolve_snooker(r, b, n, first_hit, scratch, potted, np);
-    else         resolve_pool(r, b, n, first_hit, scratch, cushion, potted, np);
+    if (r->kind)                       resolve_snooker(r, b, n, first_hit, scratch, potted, np);
+    else if (r->mode == CUE_GAME_US9)  resolve_9ball(r, b, n, first_hit, scratch, cushion, potted, np);
+    else                               resolve_pool(r, b, n, first_hit, scratch, cushion, potted, np);
 }
 
 int cue_rules_ball_legal(const CueRules *r, const CueBall *b, int n, int id) {
     if (id == CUE_ID_CUE) return 0;
     if (r->kind) return snk_on(r, id);
+    if (r->mode == CUE_GAME_US9) return id == nine_lowest(b, n);  /* must hit lowest */
     if (r->open) return id != 8;                 /* open table: anything but the 8 */
     /* the 8 is legal ONLY once your own group is fully cleared */
     if (id == 8) return group_cleared(b, n, r->group[r->turn]);
@@ -250,6 +309,8 @@ void cue_rules_status(const CueRules *r, char *buf, int cap) {
             (r->seq == 2 ? "YELLOW" : r->seq == 3 ? "GREEN" : r->seq == 4 ? "BROWN" :
              r->seq == 5 ? "BLUE" : r->seq == 6 ? "PINK" : "BLACK");
         snprintf(buf, cap, "ON %s", on);
+    } else if (r->mode == CUE_GAME_US9) {
+        snprintf(buf, cap, "ON %d", r->seq ? r->seq : 1);
     } else {
         int g = r->group[r->turn];
         const char *grp = r->open ? "OPEN" : g == 1 ? "SOLIDS" : "STRIPES";

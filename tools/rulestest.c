@@ -68,6 +68,32 @@ int main(void) {
               "group cleared, hit opponent/non-8 -> foul (must hit 8)");
     }
 
+    /* ---- US 9-ball ---- */
+    {
+        CueTable t9; cue_table_init(&t9, CUE_GAME_US9);
+        CueBall b9[CUE_MAX_BALLS]; int n9 = cue_table_rack(&t9, b9);
+        CueWorld w9; cue_table_build_world(&t9, &w9);
+        CueRules r9; cue_rules_init(&r9, &t9, 1);
+
+        CHECK( cue_rules_ball_legal(&r9, b9, n9, 1), "9ball: lowest (1) is legal");
+        CHECK(!cue_rules_ball_legal(&r9, b9, n9, 5), "9ball: a higher ball is illegal to hit first");
+
+        /* hit the lowest, no pot, with a rail -> no foul, turn passes */
+        { CueRules rr = r9; int pt[1]; int np = 0;
+          cue_rules_resolve(&rr, b9, n9, &w9, 1, 0, 1, pt, np);
+          CHECK(strstr(rr.msg,"FOUL")==NULL, "9ball: hit lowest, rail, no pot -> legal"); }
+        /* hit a non-lowest first -> foul */
+        { CueRules rr = r9; int pt[1]; int np = 0;
+          cue_rules_resolve(&rr, b9, n9, &w9, 5, 0, 1, pt, np);
+          CHECK(strstr(rr.msg,"FOUL")!=NULL, "9ball: hit wrong ball first -> foul"); }
+        /* pot the 9 legally (1 still lowest, hit it first, 9 falls via combo) -> win */
+        { CueRules rr = r9; CueBall bb[CUE_MAX_BALLS]; memcpy(bb,b9,sizeof bb);
+          int pi=-1; for(int i=0;i<n9;i++) if(bb[i].id==9) pi=i; bb[pi].on=0;
+          int pt[1]={9}; int np=1;
+          cue_rules_resolve(&rr, bb, n9, &w9, 1, 0, 1, pt, np);
+          CHECK(rr.frame_over && rr.winner==0, "9ball: pot the 9 legally -> win"); }
+    }
+
     printf(fails ? "\n%d FAIL\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;
 }
