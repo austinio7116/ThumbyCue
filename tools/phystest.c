@@ -195,6 +195,31 @@ int main(void) {
         check("corner pot", b.on == 0, buf);
     }
 
+    /* 11. Side-pocket rail glance (US straight pocket). A ball rolling along the
+     * rail toward the side pocket at a narrow angle must glance along the flat
+     * rail and reach the mouth — NOT bounce back off the knuckle. Regression for
+     * the over-smoothed cushion normal that pulled the rail normal toward the
+     * facing at the convex knuckle. */
+    {
+        CueTable t; cue_table_init(&t, CUE_GAME_US8);
+        CueWorld w; cue_table_build_world(&t, &w);
+        /* Fire straight into the flat rail just past the side-pocket knuckle
+         * (x≈0.084). On a flat rail the rebound is a clean reversal with no
+         * sideways component. The over-smoothed normal was tilted toward the
+         * facing here, kicking the ball sideways (the reported "bounces off the
+         * back of the knuckle"). So: outgoing |vx| must stay tiny. */
+        CueBall b; fresh_ball(&b, 0.13f, -t.half_wid + 2.0f * w.R, w.R);
+        b.vel = v3(0, 0, -1.0f);                 /* straight into the rail */
+        float maxvx = 0.0f;
+        int n = 0;
+        while (cue_phys_step(&w, &b, 1, 1.0f / 500.0f, NULL) && n++ < 400) {
+            float a = fabsf(b.vel.x);
+            if (a > maxvx) maxvx = a;
+        }
+        snprintf(buf, sizeof buf, "kick vx=%.3f (flat rail -> ~0)", maxvx);
+        check("side-pocket rail rebound is straight (no knuckle kick)", maxvx < 0.12f, buf);
+    }
+
     printf("\n%s (%d failures)\n", fails ? "TESTS FAILED" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }

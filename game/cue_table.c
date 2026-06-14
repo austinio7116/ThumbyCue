@@ -207,18 +207,27 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
 
     /* Smooth vertex normals: at each endpoint shared with a neighbouring
      * segment, average the two face normals so the collision normal can be
-     * interpolated continuously along the chain (no kink at the rail↔facing
-     * junction). Free tips (pocket mouths) keep the segment's own normal. */
+     * interpolated continuously along GENTLE curves (snooker rounded knuckles,
+     * bezier jaw steps) — no kink there. But ONLY when the junction is actually
+     * smooth: a sharp CONVEX corner (the US straight-pocket rail↔facing mitre,
+     * which juts into play) must NOT be averaged, or the rail's endpoint normal
+     * gets pulled toward the facing and a ball gliding along the rail bounces
+     * off "the back of the knuckle" instead of glancing off the flat rail. The
+     * jaw circle handles contact at those sharp knuckles. Threshold ≈ 37°. */
+    const float SMOOTH_COS = 0.80f;
     for (int s = 0; s < w->nseg; s++) {
-        Vec3 na = w->seg[s].n, nb = w->seg[s].n;
+        Vec3 ns = w->seg[s].n;
+        Vec3 na = ns, nb = ns;
         for (int o = 0; o < w->nseg; o++) {
             if (o == s) continue;
+            Vec3 no = w->seg[o].n;
+            if (ns.x*no.x + ns.z*no.z < SMOOTH_COS) continue;   /* sharp corner: keep crisp */
             if (v3_len2(v3_sub(w->seg[o].b, w->seg[s].a)) < 1e-8f ||
                 v3_len2(v3_sub(w->seg[o].a, w->seg[s].a)) < 1e-8f)
-                na = v3_add(na, w->seg[o].n);
+                na = v3_add(na, no);
             if (v3_len2(v3_sub(w->seg[o].a, w->seg[s].b)) < 1e-8f ||
                 v3_len2(v3_sub(w->seg[o].b, w->seg[s].b)) < 1e-8f)
-                nb = v3_add(nb, w->seg[o].n);
+                nb = v3_add(nb, no);
         }
         w->seg[s].na = v3_norm(na);
         w->seg[s].nb = v3_norm(nb);

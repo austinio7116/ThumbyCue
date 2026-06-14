@@ -545,7 +545,7 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
 /* ---- ball sets --------------------------------------------------------- */
 /* 0 = PRO (per-number coloured solids/stripes), 1 = UK yellow/blue solids,
  * 2 = UK yellow/red solids, 3 = US "dyna" (yellow solids / maroon stripes). */
-void cue_render_set_ball_set(int s) { s_ball_set = (s < 0 || s > 3) ? 0 : s; }
+void cue_render_set_ball_set(int s) { s_ball_set = (s < 0 || s > 4) ? 0 : s; }
 
 /* the standard pro per-number hues for ids 1..7 (9..15 reuse 1..7's hue) */
 static const uint16_t k_prohue[8] = {
@@ -559,7 +559,16 @@ static const uint16_t k_prohue[8] = {
 #define BALL_MAROON RGB565C(120,22,42)
 #define BALL_BLACK  RGB565C(20,20,22)
 #define BALL_WHITE  RGB565C(235,235,225)
-static int set_striped(void) { return s_ball_set == 0 || s_ball_set == 3; }  /* PRO/DYNA stripe 9-15 */
+/* Pro Tournament per-number palette (from 2dpool "Pro Tournament" ballColors);
+ * striped balls use the same hue as their +8 solid, on BLACK poles. */
+static const uint16_t k_ptourhue[8] = {
+    0, RGB565C(245,180,0),  RGB565C(0,55,237),  RGB565C(255,30,0),
+    RGB565C(255,71,123),    RGB565C(154,46,255), RGB565C(0,227,155),
+    RGB565C(128,50,11) };
+/* striped sets: 0 PRO (per-number), 3 dyna (maroon), 4 pro-tournament. */
+static int set_striped(void) { return s_ball_set == 0 || s_ball_set == 3 || s_ball_set == 4; }
+/* hue for the current set's ball id 1..7 (used by solids and stripes). */
+static uint16_t set_hue(uint8_t i) { return (s_ball_set == 4) ? k_ptourhue[i] : k_prohue[i]; }
 
 /* ---- ball texture ------------------------------------------------------ */
 static uint16_t ball_base(uint8_t id) {
@@ -575,14 +584,74 @@ static uint16_t ball_base(uint8_t id) {
     if (s_is_snooker) return RGB565C(190, 30, 30);          /* reds 1..15 */
     if (id == 8) return BALL_BLACK;
     switch (s_ball_set) {
-        case 1: return (id <= 7) ? BALL_YELLOW : BALL_BLUE;     /* UK yellow/blue */
-        case 2: return (id <= 7) ? BALL_YELLOW : BALL_RED;      /* UK yellow/red  */
-        case 3: return (id <= 7) ? BALL_GOLD   : BALL_WHITE;    /* dyna: striped body */
+        case 1: return (id <= 7) ? BALL_YELLOW : BALL_BLUE;    /* UK yellow/blue */
+        case 2: return (id <= 7) ? BALL_YELLOW : BALL_RED;     /* UK yellow/red  */
+        case 3: return (id <= 7) ? BALL_GOLD   : BALL_WHITE;   /* pro league: gold / maroon-on-white */
+        case 4: return (id <= 7) ? k_ptourhue[id] : BALL_BLACK; /* pro tour: per-num / band-on-black */
         default:                                               /* PRO */
             if (id >= 1 && id <= 7) return k_prohue[id];
             return BALL_WHITE;                                 /* 9-15 white striped body */
     }
 }
+/* 3x5 digit glyphs, packed top row first, 3 bits/row (MSB = left column). */
+static const uint16_t k_digit3x5[10] = {
+    0x7B6F, /* 0: 111 101 101 101 111 */
+    0x2C97, /* 1: 010 110 010 010 111 */
+    0x73E7, /* 2: 111 001 111 100 111 */
+    0x73CF, /* 3: 111 001 111 001 111 */
+    0x5BC9, /* 4: 101 101 111 001 001 */
+    0x79CF, /* 5: 111 100 111 001 111 */
+    0x79EF, /* 6: 111 100 111 101 111 */
+    0x7292, /* 7: 111 001 010 010 010 */
+    0x7BEF, /* 8: 111 101 111 101 111 */
+    0x7BCF, /* 9: 111 101 111 001 111 */
+};
+
+/* Render the white number circle (and, for the dyna set, the dynasphere black
+ * ring + three spoke radii) onto the +x pole cap. `us` selects numbered sets. */
+static uint16_t number_patch(uint8_t id, Vec3 nb, uint16_t base, int us) {
+    if (!us || nb.x <= 0.90f) return base;
+    /* Map the pole cap to a unit disc (py,pz); edge of the patch -> r2 ~ 1. */
+    float py = nb.y * 2.30f, pz = nb.z * 2.30f;
+    float r2 = py * py + pz * pz;
+    if (r2 > 1.0f) return base;
+    const uint16_t WHT = RGB565C(245, 245, 245);
+    const uint16_t INK = RGB565C(15, 15, 18);
+    /* dynasphere-style number circle: black ring + N spoke radii.
+     * set 3 (pro league) = 3 spokes; set 4 (pro tournament) = 2 spokes. */
+    int nspoke = (s_ball_set == 3) ? 3 : (s_ball_set == 4) ? 2 : 0;
+    if (nspoke) {
+        if (r2 > 0.78f) return INK;        /* outer black ring */
+        if (r2 > 0.30f) {                  /* spoke radii, evenly spaced */
+            static const float dk[3][2] = {
+                {1.0f, 0.0f}, {-0.5f, 0.86603f}, {-0.5f, -0.86603f} };
+            /* 2-spoke set uses a vertical pair; 3-spoke uses the tripod above */
+            static const float dk2[2][2] = { {0.0f, 1.0f}, {0.0f, -1.0f} };
+            const float (*sp)[2] = (nspoke == 2) ? dk2 : dk;
+            for (int k = 0; k < nspoke; k++) {
+                float dot = py * sp[k][0] + pz * sp[k][1];
+                if (dot <= 0.0f) continue;
+                float cr = py * sp[k][1] - pz * sp[k][0];
+                if (cr * cr < 0.018f * r2) return INK;
+            }
+        }
+    }
+    /* Digit(s): 1 cell for 1-9, two side-by-side cells for 10-15. */
+    int two = id >= 10;
+    float uw = two ? 0.78f : 0.40f;         /* half-width of the glyph area */
+    float gx = (pz + uw) / (2.0f * uw) * (two ? 7.0f : 3.0f);
+    float gy = (0.62f - py) / 1.24f * 5.0f;
+    int col = (int)gx, row = (int)gy;
+    if (gx < 0.0f || gy < 0.0f || row > 4) return WHT;
+    int d, dc;
+    if (!two) { d = id % 10; dc = col; if (col > 2) return WHT; }
+    else if (col < 3) { d = id / 10; dc = col; }
+    else if (col < 4) return WHT;           /* gap column */
+    else { d = id % 10; dc = col - 4; if (dc > 2) return WHT; }
+    int rowbits = (k_digit3x5[d] >> ((4 - row) * 3)) & 7;
+    return ((rowbits >> (2 - dc)) & 1) ? INK : WHT;
+}
+
 /* Sample the ball's surface colour for a ball-local unit normal. */
 static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
     /* Cue ball: a "measles" spotted ball — six small red dots, one centred on
@@ -594,18 +663,20 @@ static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
         return base;
     }
     if (s_is_snooker) return base;              /* snooker balls are unmarked */
-    int us = (s_ball_set == 0 || s_ball_set == 3);   /* US sets carry numbers */
+    int us = (s_ball_set == 0 || s_ball_set == 3 || s_ball_set == 4);  /* numbered sets */
     if (id >= 9 && id <= 15) {
-        if (set_striped() && fabsf(nb.y) < 0.34f) {   /* stripe band (thin) */
-            return (s_ball_set == 3) ? BALL_MAROON : k_prohue[id - 8];
+        float half = (s_ball_set == 4) ? 0.55f : 0.42f;   /* pro-tour wider band */
+        if (set_striped() && fabsf(nb.y) < half) {
+            /* don't paint the stripe over the number circle */
+            if (!(us && nb.x > 0.90f)) {
+                if (s_ball_set == 3) return BALL_MAROON;
+                return set_hue(id - 8);            /* PRO / pro-tour: per-number band */
+            }
         }
-        if (us && nb.x > 0.90f) return RGB565C(245, 245, 245);   /* number patch */
-        return base;                            /* UK: solid body, no stripe */
+        return number_patch(id, nb, base, us);  /* UK: solid body, no stripe */
     }
-    if (id >= 1 && id <= 8) {                    /* solids + 8 */
-        if (us && nb.x > 0.90f) return RGB565C(245, 245, 245);   /* number patch */
-        return base;
-    }
+    if (id >= 1 && id <= 8)                       /* solids + 8 */
+        return number_patch(id, nb, base, us);
     return base;
 }
 
@@ -803,4 +874,80 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
         r3d_line(s_cue.x0, s_cue.y0 + 1, 65000, s_cue.x1, s_cue.y1 + 1, 65000,
                  shade565(s_cue.color, 0.7f), y0, y1);
     }
+}
+
+/* Draw one flat sphere-shaded ball icon using the live ball_base/ball_sample.
+ * face_x: 0 = +z toward viewer (stripe reads as a mid band; for HUD group hint);
+ *         1 = +x toward viewer (the number circle faces out; for menu previews). */
+static void draw_ball_icon(uint16_t *fb, int cx, int cy, int rad, uint8_t id, int face_x) {
+    uint16_t base = ball_base(id);
+    for (int dy = -rad; dy <= rad; dy++) {
+        int y = cy + dy; if (y < 0 || y >= CUE_FB_H) continue;
+        for (int dx = -rad; dx <= rad; dx++) {
+            int x = cx + dx; if (x < 0 || x >= CUE_FB_W) continue;
+            float u = (float)dx / rad, v = (float)dy / rad;
+            float r2 = u * u + v * v; if (r2 > 1.0f) continue;
+            float nz = sqrtf(1.0f - r2);
+            Vec3 nb = face_x ? v3(nz, -v, u) : v3(u, -v, nz);
+            uint16_t c = ball_sample(id, nb, base);
+            float hl = -0.5f * u - 0.5f * v + 0.7f * nz;   /* top-left spec */
+            if (hl > 0.95f) c = RGB565C(255, 255, 255);
+            else            c = shade565(c, 0.45f + 0.55f * nz);
+            fb[y * CUE_FB_W + x] = c;
+        }
+    }
+}
+
+/* HUD group hint: group 1 = low/solids (id 1), 2 = high/stripes (id 9). */
+void cue_render_group_icon(uint16_t *fb, int cx, int cy, int rad, int group) {
+    draw_ball_icon(fb, cx, cy, rad, (group == 2) ? 9 : 1, 0);
+}
+
+/* 3D-shaded cue ball for the spin/aim HUD: a white sphere with a specular
+ * highlight and the tip-contact marker drawn on its front face at (side,vert)
+ * (fractions of R; +side = right english, +vert = top/follow). Replaces the old
+ * flat 2D disc so the spin readout matches the game balls. */
+void cue_render_spin_ball(uint16_t *fb, int cx, int cy, int rad,
+                          float side, float vert) {
+    const uint16_t body = RGB565C(238, 238, 228);
+    const uint16_t spot = RGB565C(205, 45, 40);
+    const uint16_t ring = RGB565C(120, 24, 22);
+    float ms = 0.30f;                 /* marker radius (fraction of ball) */
+    for (int dy = -rad; dy <= rad; dy++) {
+        int y = cy + dy; if (y < 0 || y >= CUE_FB_H) continue;
+        for (int dx = -rad; dx <= rad; dx++) {
+            int x = cx + dx; if (x < 0 || x >= CUE_FB_W) continue;
+            float u = (float)dx / rad, v = (float)dy / rad;
+            float r2 = u * u + v * v; if (r2 > 1.0f) continue;
+            float nz = sqrtf(1.0f - r2);
+            float mu = u - side, mv = v + vert;       /* offset to contact point */
+            float md = sqrtf(mu * mu + mv * mv);
+            uint16_t c;
+            if (md < ms * 0.62f)        c = spot;     /* contact dot */
+            else if (md < ms)           c = ring;     /* dark rim around it */
+            else {
+                float hl = -0.5f * u - 0.5f * v + 0.7f * nz;
+                c = (hl > 0.95f) ? RGB565C(255,255,255)
+                                 : shade565(body, 0.5f + 0.5f * nz);
+            }
+            fb[y * CUE_FB_W + x] = c;
+        }
+    }
+}
+
+/* Ball-set preview row for the menu: a representative solid, stripe and the 8
+ * (or red/colour/black for snooker), drawn with the given set so the player can
+ * see what they're picking. Temporarily overrides the active set/snooker flag. */
+void cue_render_set_preview(uint16_t *fb, int cx, int cy, int rad,
+                            int ballset, int snooker) {
+    int sb = s_ball_set, ss = s_is_snooker;
+    s_ball_set = (ballset < 0 || ballset > 4) ? 0 : ballset;
+    s_is_snooker = snooker;
+    uint8_t ids[3];
+    if (snooker) { ids[0] = 1; ids[1] = CUE_ID_YELLOW; ids[2] = CUE_ID_BLACK; }
+    else         { ids[0] = 1; ids[1] = 11;            ids[2] = 8; }  /* solid / stripe / 8 */
+    int gap = rad * 2 + 4;
+    for (int i = 0; i < 3; i++)
+        draw_ball_icon(fb, cx + (i - 1) * gap, cy, rad, ids[i], 1);
+    s_ball_set = sb; s_is_snooker = ss;
 }

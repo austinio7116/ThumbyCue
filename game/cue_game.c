@@ -35,8 +35,10 @@ static const char *k_mode_name[CUE_GAME_COUNT] = {
     "UK 8-BALL", "US 8-BALL", "US 9-BALL", "SNOOKER 10", "SNOOKER 15" };
 static int s_cpu;             /* opponent: 0 = 2 player, 1 = CPU */
 static int s_cloth_idx;
-static int s_ballset;          /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna */
-static const char *k_ballset_name[4] = { "PRO", "UK Y/B", "UK Y/R", "DYNA" };
+static int s_ballset;          /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna, 4 pro-tour */
+#define CUE_NBALLSET 5
+static const char *k_ballset_name[CUE_NBALLSET] = {
+    "PRO", "UK Y/B", "UK Y/R", "DYNA", "PRO TOUR" };
 static int default_ballset(int mode) {
     if (mode == CUE_GAME_UK8) return 1;        /* yellow/blue solids */
     if (mode == CUE_GAME_US8) return 3;        /* dyna stripe */
@@ -176,10 +178,10 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
                 float lx = s_table.half_len, lz = s_table.half_wid;
                 if (s_look.x> lx) s_look.x= lx; if (s_look.x<-lx) s_look.x=-lx;
                 if (s_look.z> lz) s_look.z= lz; if (s_look.z<-lz) s_look.z=-lz;
-            } else if (b->rb) {                          /* zoom */
-                if (b->up)   s_fl_dist += 0.6f*dt;
-                if (b->down) s_fl_dist -= 0.6f*dt;
-                if (s_fl_dist<0) s_fl_dist=0; if (s_fl_dist>1) s_fl_dist=1;
+            } else if (b->rb) {                          /* zoom (unrestricted) */
+                if (b->up)   s_fl_dist += 0.9f*dt;
+                if (b->down) s_fl_dist -= 0.9f*dt;
+                if (s_fl_dist<0) s_fl_dist=0; if (s_fl_dist>1.5f) s_fl_dist=1.5f;
             } else {                                     /* orbit + pitch (to overhead) */
                 if (b->left)  s_fl_az += 1.2f*dt;
                 if (b->right) s_fl_az -= 1.2f*dt;
@@ -355,7 +357,7 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         }
         if (s_cursor == 1 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right))) s_cpu ^= 1;
         if (s_cursor == 2 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right)))
-            s_ballset = (s_ballset + (jp(b->right,s_prev.right)?1:3)) % 4;
+            s_ballset = (s_ballset + (jp(b->right,s_prev.right)?1:CUE_NBALLSET-1)) % CUE_NBALLSET;
         if (s_cursor == 3 && jp(b->a, s_prev.a)) { new_frame(); s_screen = SC_GAME; }
         if (jp(b->b, s_prev.b)) { s_screen = SC_MAIN; s_cursor = 0; }
         break; }
@@ -399,6 +401,18 @@ static float s_dbg_fov = 52.0f;
 void cue_game_debug_cam(float ex,float ey,float ez,float tx,float ty,float tz,float fov){
     s_dbg=1; s_dbg_eye=v3(ex,ey,ez); s_dbg_tgt=v3(tx,ty,tz); s_dbg_fov=fov;
 }
+void cue_game_set_ballset(int s){ s_ballset = (s<0||s>=CUE_NBALLSET)?0:s; cue_render_set_ball_set(s_ballset); }
+/* Debug: lay balls 1..15 in a 5x3 grid, number patch (+x) facing the camera. */
+void cue_game_debug_numbers(void) {
+    s_kind = CUE_GAME_UK8; rack(); memset(s_balls,0,sizeof s_balls);
+    float R=s_table.R; int n=0;
+    Mat3 up=m3_identity(); m3_rotate_world(&up, v3(0,0,1), 1.5707963f); /* +x -> +y */
+    for(int id=1; id<=15; id++){ int row=(id-1)/5, col=(id-1)%5;
+        CueBall*bb=&s_balls[n++];
+        bb->pos=v3((row-1)*3.0f*R, R, (col-2)*3.0f*R);
+        bb->orient=up; bb->on=1; bb->id=id; }
+    s_n=n; s_screen=SC_GAME; s_state=GS_AIM;
+}
 void cue_game_debug_spread(void) {
     s_kind = CUE_GAME_SNK15; rack(); memset(s_balls,0,sizeof s_balls);
     float R=s_table.R;
@@ -437,7 +451,10 @@ static void build_view(CueView *v) {
          * zoom scales with table size so it frames any table. */
         float ext = (s_table.half_len>s_table.half_wid)?s_table.half_len:s_table.half_wid;
         float ang = (0.12f + 0.82f*s_fl_el) * 1.5707963f;   /* ~11° … ~85° elevation */
-        float dist = ext * (2.4f - 1.7f*s_fl_dist);          /* far … close */
+        /* s_fl_dist 0..1.5 maps framed-far → right up against a ball. Floor at
+         * R + near + margin so a single ball can fill the screen without
+         * clipping the near plane. */
+        float dist = ext*2.6f*(1.0f - s_fl_dist/1.5f) + (s_table.R + 0.062f);
         float ch = cosf(ang), sh = sinf(ang);
         Vec3 cam = v3(s_look.x - cosf(s_fl_az)*dist*ch, s_look.y + dist*sh,
                       s_look.z - sinf(s_fl_az)*dist*ch);
@@ -490,16 +507,8 @@ static void dim(uint16_t *fb, int amt) {            /* darken whole fb for overl
 }
 
 static void draw_spin_indicator(uint16_t *fb, int cx, int cy, int r) {
-    for (int dy=-r;dy<=r;dy++) for(int dx=-r;dx<=r;dx++){
-        if (dx*dx+dy*dy>r*r) continue; int x=cx+dx,y=cy+dy;
-        if ((unsigned)x>=CUE_FB_W||(unsigned)y>=CUE_FB_H) continue;
-        fb[y*CUE_FB_W+x]=RGB565C(230,230,220);
-    }
-    int tx=cx+(int)(s_tip_side/0.5f*r), ty=cy-(int)(s_tip_vert/0.5f*r);
-    for (int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
-        int x=tx+dx,y=ty+dy; if((unsigned)x>=CUE_FB_W||(unsigned)y>=CUE_FB_H) continue;
-        fb[y*CUE_FB_W+x]=RGB565C(210,40,40);
-    }
+    /* 3D cue ball; tip range is ±0.5R, normalise to the ball face (±1). */
+    cue_render_spin_ball(fb, cx, cy, r, s_tip_side / 0.5f, s_tip_vert / 0.5f);
 }
 
 void cue_game_draw_overlay(uint16_t *fb) {
@@ -524,10 +533,13 @@ void cue_game_draw_overlay(uint16_t *fb) {
         snprintf(buf,sizeof buf,"GAME  < %s >", k_mode_name[s_kind]);
         const char *it[4]; it[0]=buf;
         char obuf[24]; snprintf(obuf,sizeof obuf,"VS    < %s >", s_cpu?"CPU":"PLAYER 2");
+        int snk = (s_kind >= CUE_GAME_SNK10);   /* derive from menu mode, not stale table */
         char bbuf[24]; snprintf(bbuf,sizeof bbuf,"BALLS < %s >",
-            s_table.is_snooker ? "SNOOKER" : k_ballset_name[s_ballset]);
+            snk ? "SNOOKER" : k_ballset_name[s_ballset]);
         it[1]=obuf; it[2]=bbuf; it[3]="START";
         menu_list(fb, it, 4, s_cursor, 40);
+        /* live preview of the chosen ball set (or standard snooker balls) */
+        cue_render_set_preview(fb, 64, 100, 8, s_ballset, snk);
         center(fb, "B BACK", 116, RGB565C(150,150,160));
         break; }
     case SC_OPTIONS: {
@@ -565,9 +577,18 @@ void cue_game_draw_overlay(uint16_t *fb) {
         center(fb, "A REMATCH   B MENU", 100, RGB565C(180,180,190));
         break; }
     case SC_GAME: {
-        /* in-game HUD */
-        cue_rules_status(&s_rules, buf, sizeof buf);
-        craft_font_draw(fb, buf, 3, 3, RGB565C(230,230,210));
+        /* in-game HUD. For pool with groups assigned, show an example ball of
+         * the shooter's group (yellow / blue / striped) instead of text. */
+        int pool_grp = (!s_rules.kind && s_rules.mode != CUE_GAME_US9
+                        && !s_rules.open);
+        if (pool_grp) {
+            cue_render_group_icon(fb, 9, 7, 5, s_rules.group[s_rules.turn]);
+            if (s_rules.shots_remaining > 1)
+                craft_font_draw(fb, "2 SHOTS", 18, 4, RGB565C(230,230,210));
+        } else {
+            cue_rules_status(&s_rules, buf, sizeof buf);
+            craft_font_draw(fb, buf, 3, 3, RGB565C(230,230,210));
+        }
         if (s_table.is_snooker) {
             char sb[24]; snprintf(sb,sizeof sb,"%d-%d", s_rules.score[0], s_rules.score[1]);
             craft_font_draw(fb, sb, 3, 11, RGB565C(200,220,255));
@@ -581,7 +602,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
                 uint16_t c=(y<h)?((y>44)?RGB565C(230,40,30):(y>26)?RGB565C(230,170,30):RGB565C(60,210,70)):RGB565C(40,40,48);
                 fb[yy*CUE_FB_W+3]=c; fb[yy*CUE_FB_W+4]=c; fb[yy*CUE_FB_W+5]=c; }
         }
-        draw_spin_indicator(fb, 116, 112, 9);
+        draw_spin_indicator(fb, 114, 110, 12);
         if (s_state == GS_PLACE) center(fb, "PLACE: DPAD  A SET", 119, RGB565C(240,240,160));
         else if (s_freelook) center(fb, "FREE LOOK  A BACK", 119, RGB565C(150,200,150));
         else if (s_state == GS_AIM) center(fb, "LB LOOK", 119, RGB565C(120,150,120));

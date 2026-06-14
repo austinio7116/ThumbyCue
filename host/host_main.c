@@ -55,6 +55,7 @@ int main(int argc, char **argv) {
     cue_game_init(0x1234u);
     if (getenv("CUE_MODE"))      cue_game_set_mode(atoi(getenv("CUE_MODE")));
     else if (!getenv("CUE_MENU")) cue_game_set_kind(snooker);   /* CUE_MENU: stay on title */
+    if (getenv("CUE_BALLSET"))   cue_game_set_ballset(atoi(getenv("CUE_BALLSET")));
 
     const char *shot = getenv("CUE_SHOT");
     if (shot) {
@@ -69,6 +70,13 @@ int main(int argc, char **argv) {
         const char *lm = getenv("CUE_LIGHT");
         if (lm) cue_render_set_light_mode(atoi(lm));
         if (getenv("CUE_BALLTEST")) cue_game_debug_spread();
+        if (getenv("CUE_NUMTEST"))  cue_game_debug_numbers();
+        if (getenv("CUE_PLAYMENU")) {            /* title -> main -> PLAY menu */
+            for (int t = 0; t < 2; t++) {
+                b.a = 1; cue_game_tick(&b, 1.0f/60.0f); b.a = 0;
+                for (int i = 0; i < 4; i++) cue_game_tick(&b, 1.0f/60.0f);
+            }
+        }
         if (getenv("CUE_OVERHEAD")) {           /* tap LB once to toggle */
             b.lb = 1; cue_game_tick(&b, 1.0f / 60.0f); b.lb = 0;
         }

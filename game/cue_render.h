@@ -36,7 +36,19 @@ int cue_render_project(Vec3 world, float *sx, float *sy, uint16_t *d);
 
 /* Ball lighting style: 0 smooth, 1 hard, 2 toon, 3 gloss. */
 void cue_render_set_light_mode(int m);
-/* Ball set: 0 PRO, 1 UK yellow/blue, 2 UK yellow/red, 3 US dyna stripe. */
+/* Ball set: 0 PRO, 1 UK yellow/blue, 2 UK yellow/red, 3 dyna, 4 pro-tournament. */
 void cue_render_set_ball_set(int s);
+
+/* Draw a small example ball for the active set into the HUD (group hint):
+ * group 1 = low/solids, group 2 = high/stripes. */
+void cue_render_group_icon(uint16_t *fb, int cx, int cy, int rad, int group);
+
+/* Draw a 3-ball preview row for `ballset` (snooker shows standard balls). */
+void cue_render_set_preview(uint16_t *fb, int cx, int cy, int rad,
+                            int ballset, int snooker);
+
+/* 3D-shaded cue ball for the spin HUD; marker at tip (side,vert) in R-fractions. */
+void cue_render_spin_ball(uint16_t *fb, int cx, int cy, int rad,
+                          float side, float vert);
 
 #endif
