@@ -69,12 +69,22 @@ static void clamp_tip(void) {
     if (r > lim) { s_tip_side *= lim / r; s_tip_vert *= lim / r; }
 }
 
+static float s_menu_ms;
+
 void cue_game_tick(const CraftRawButtons *b, float dt) {
     int jp_a  = b->a && !s_prev.a;
     int jp_lb = b->lb && !s_prev.lb;
-    int jp_menu = b->menu && !s_prev.menu;
 
-    if (jp_menu) { rerack(); s_prev = *b; return; }
+    /* MENU: tap = re-rack the same game; hold (>0.5s) = switch pool/snooker. */
+    if (b->menu) {
+        s_menu_ms += dt * 1000.0f;
+    } else if (s_prev.menu) {            /* just released */
+        if (s_menu_ms >= 500.0f) s_kind ^= 1;
+        rerack();
+        s_menu_ms = 0.0f;
+        s_prev = *b;
+        return;
+    }
     if (jp_lb) s_overhead ^= 1;
 
     if (s_state == GS_AIM || s_state == GS_BACKSWING) {
