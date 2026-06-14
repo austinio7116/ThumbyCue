@@ -190,9 +190,10 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                 arc[k] = p;
             }
             /* Curved baize lip: roll the cloth down into the pocket from the
-             * MOUTH ARC (the true cloth edge), toward this mouth's pocket centre.
-             * Tangent profile (y = -d(1-cos phi)) → no hard top edge. */
-            if (s_lip_mode) {
+             * MOUTH ARC. ONLY for rounded (UK/snooker) pockets — a mitred US
+             * pocket must keep a SHARP straight edge (no rolled cloth), so skip
+             * the lip there. */
+            if (s_lip_mode && !straight) {
                 int pidx = 0; float bestp = 1e9f;
                 for (int q = 0; q < w->npocket; q++) {
                     float dx = w->pocket[q].x - m.x, dz = w->pocket[q].z - m.z;

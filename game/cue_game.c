@@ -52,7 +52,8 @@ static int   s_aim_dir;
 static float s_cam_pitch  = 0.45f; /* 0 = low/level … 1 = high/steep */
 static float s_cam_dist_z = 0.50f; /* 0 = far/wide … 1 = close/zoomed-in */
 static int   s_overhead;
-static Vec3  s_orbit_c;            /* fixed camera-orbit centre during a shot */
+static Vec3  s_orbit_c;            /* frozen camera-orbit centre (freeview) */
+static int   s_freeview;          /* shot cam: 0 = follow cue ball, 1 = free-roam */
 static float s_power, s_tip_side, s_tip_vert;
 static CraftRawButtons s_prev;
 static float s_frame_ms;
@@ -104,7 +105,8 @@ static void begin_shot(void) {
                     s_tip_side, s_tip_vert);
     s_world._acc = 0.0f;
     s_world.first_hit = -1;            /* physics records the cue's real first contact */
-    s_orbit_c = cue_pos();             /* camera stays put here during the shot (no follow) */
+    s_orbit_c = cue_pos();
+    s_freeview = 0;                    /* follow the cue ball by default */
     s_first_hit = -1; s_cushion_seen = 0;
     for (int i = 0; i < s_n; i++) s_was_on[i] = s_balls[i].on;
     cue_audio_sfx(CUE_SFX_STRIKE, s_power);
@@ -225,7 +227,10 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
             else s_state = GS_AIM;
         }
     } else if (s_state == GS_SHOOTING) {
-        if (!b->b) {       /* free-orbit camera to watch */
+        /* A taps toggle FREEVIEW: stop following the cue ball and roam freely
+         * (orbit/pitch/zoom) from the ball's current spot for the rest of the shot. */
+        if (jp(b->a, s_prev.a)) { s_freeview ^= 1; if (s_freeview) s_orbit_c = cue_pos(); }
+        if (!b->b) {       /* orbit / pitch / zoom (works in follow + freeview) */
             if (b->left)  s_view_az += 1.1f*dt;
             if (b->right) s_view_az -= 1.1f*dt;
             if (b->rb) {                       /* RB + UP/DOWN = zoom */
@@ -375,9 +380,9 @@ static void build_view(CueView *v) {
         v->pos=cam; v->basis.r[0]=right; v->basis.r[1]=up; v->basis.r[2]=fwd;
         return;
     }
-    /* During a shot the camera orbits a FIXED point (where the cue ball was
-     * struck) — no auto-follow; the player rotates/zooms with the controls. */
-    Vec3 P = (s_state == GS_SHOOTING) ? s_orbit_c : cue_pos();
+    /* During a shot the camera FOLLOWS the cue ball; tapping A enters freeview,
+     * where it orbits the frozen point and the player roams with the controls. */
+    Vec3 P = (s_state == GS_SHOOTING && s_freeview) ? s_orbit_c : cue_pos();
     Vec3 dir = v3(cosf(s_view_az),0,sinf(s_view_az));
     if (s_overhead) {
         float focal=64.0f/tanf(v->fov_deg*DEG2RAD*0.5f);
@@ -519,6 +524,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
         }
         draw_spin_indicator(fb, 116, 112, 9);
         if (s_state == GS_PLACE) center(fb, "PLACE: DPAD  A SET", 119, RGB565C(240,240,160));
+        else if (s_state == GS_SHOOTING) center(fb, s_freeview ? "FREEVIEW" : "A FREEVIEW", 119, RGB565C(150,200,150));
         else if (s_msg_t > 0 && s_rules.msg[0]) center(fb, s_rules.msg, 30, RGB565C(255,230,140));
         int fps=(s_frame_ms>0.1f)?(int)(1000.0f/s_frame_ms+0.5f):0; if(fps>999)fps=999;
         snprintf(buf,sizeof buf,"%dF", fps); craft_font_draw(fb, buf, 110, 3, RGB565C(140,140,150));
