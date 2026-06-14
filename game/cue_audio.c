@@ -37,11 +37,12 @@ typedef struct {
 /* STRIKE — cue tip: bright, short, noisy click (centroid ~5.7 kHz, ~32 ms). */
 static const SfxModel M_STRIKE  = { 2, {4200, 7200}, {1.6f, 2.0f}, {1.0f, 0.7f},
     0.028f, 0.6f, 1.5f, 0.85f };
-/* CLACK — ball on ball: broad band ~2.3–2.9 kHz, short tock (~55 ms). */
-static const SfxModel M_CLACK   = { 2, {2150, 2700}, {5.5f, 5.5f}, {1.0f, 0.7f},
-    0.045f, 0.18f, 1.8f, 0.45f };
-static const SfxModel M_CLACK2  = { 2, {2500, 1850}, {5.0f, 4.0f}, {1.0f, 0.7f},
-    0.050f, 0.20f, 1.8f, 0.55f };
+/* CLACK — ball on ball: broad band with a bright high component (~2.6 + 3.7
+ * kHz) for a sharper, higher "tick" (was a touch deep), short tock (~55 ms). */
+static const SfxModel M_CLACK   = { 2, {2600, 3700}, {5.0f, 4.5f}, {1.0f, 0.6f},
+    0.045f, 0.22f, 1.9f, 0.62f };
+static const SfxModel M_CLACK2  = { 2, {2850, 3900}, {5.0f, 4.5f}, {1.0f, 0.55f},
+    0.050f, 0.22f, 1.9f, 0.66f };
 /* CUSHION — duller, lower, rubbery thud. */
 static const SfxModel M_CUSHION = { 2, {750, 1300}, {3.0f, 2.5f}, {1.0f, 0.5f},
     0.045f, 0.12f, 1.7f, 0.22f };
