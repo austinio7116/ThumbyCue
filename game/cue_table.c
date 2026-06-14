@@ -103,10 +103,9 @@ static void add_pocket(CueWorld *w, float x, float z, float cap) {
     w->pocket_r[i] = cap;
 }
 
-/* A cushion chain (faithful to the 2D model): facing-tip P1 → knuckle P2 →
- * knuckle P3 → facing-tip P4. Segments: P1-P2 facing, P2-P3 nose, P3-P4 facing.
- * Knuckle circles sit at P2,P3. P2,P3 are pushed into w->jaw in boundary order
- * so the renderer can fan the bed straight off them. */
+/* Straight cushion chain (US pool): facing-tip → knuckle → knuckle →
+ * facing-tip. P2,P3 are pushed into w->jaw in boundary order so the renderer
+ * can fan the bed off them. */
 static void add_chain(CueWorld *w, Vec3 P1, Vec3 P2, Vec3 P3, Vec3 P4) {
     add_seg(w, P1, P2, 1);
     add_seg(w, P2, P3, 0);
@@ -115,30 +114,85 @@ static void add_chain(CueWorld *w, Vec3 P1, Vec3 P2, Vec3 P3, Vec3 P4) {
     add_jaw(w, P3);
 }
 
+/* Append nseg facing segments along a quadratic-bezier curve from s to e with
+ * a perpendicular bulge (matches the 2D game's generateCurvePoints). */
+static void seg_curve(CueWorld *w, Vec3 s, Vec3 e, float dir, int nseg) {
+    float dx = e.x - s.x, dz = e.z - s.z;
+    float len = sqrtf(dx*dx + dz*dz);
+    if (len < 1e-6f) return;
+    float px = -dz/len, pz = dx/len, depth = len * 0.4f * dir;
+    float cx = (s.x+e.x)*0.5f + px*depth, cz = (s.z+e.z)*0.5f + pz*depth;
+    Vec3 prev = s;
+    for (int i = 1; i <= nseg; i++) {
+        float t = (float)i/nseg, o = 1.0f - t;
+        Vec3 p = v3(o*o*s.x + 2*o*t*cx + t*t*e.x, 0,
+                    o*o*s.z + 2*o*t*cz + t*t*e.z);
+        add_seg(w, prev, p, 1);
+        prev = p;
+    }
+}
+
+/* Curved cushion chain (snooker/UK): bezier jaw → straight nose → bezier jaw.
+ * The curves bulge into the pocket, giving rounded knuckles. */
+static void add_curved_chain(CueWorld *w, Vec3 tipIn, Vec3 kIn, Vec3 kMid,
+                             Vec3 tipMid, float aIn, float aOut, int nIn, int nOut) {
+    seg_curve(w, tipIn, kIn, aIn, nIn);
+    add_seg(w, kIn, kMid, 0);
+    seg_curve(w, kMid, tipMid, aOut, nOut);
+    add_jaw(w, kIn);
+    add_jaw(w, kMid);
+}
+
 void cue_table_build_world(const CueTable *t, CueWorld *w) {
     cue_world_defaults(w, t->R, t->mass);
     w->cush_tilt = asinf((t->cushion_h - t->R) / t->R);
     w->jaw_r = t->jaw_r;
 
-    const float hl = t->half_len, hw = t->half_wid;
-    const float g = t->gap_corner, sg = t->gap_side, sl = t->facing_len;
-    const float cc = cosf(t->ang_corner * DEG), sc = sinf(t->ang_corner * DEG);
-    const float cs = cosf(t->ang_side * DEG),   ss = sinf(t->ang_side * DEG);
+    const float hl = t->half_len, hw = t->half_wid, R = t->R;
 
-    /* Six cushion chains. Facings splay OUTWARD (|z|>hw on long rails, |x|>hl
-     * on short rails). Top = −Z, bottom = +Z, left = −X, right = +X. */
-    add_chain(w, v3(-hl+g - cc*sl, 0, -hw - sc*sl), v3(-hl+g, 0, -hw),
-                 v3(-sg, 0, -hw),                   v3(-sg + cs*sl, 0, -hw - ss*sl));
-    add_chain(w, v3(sg - cs*sl, 0, -hw - ss*sl),    v3(sg, 0, -hw),
-                 v3(hl-g, 0, -hw),                  v3(hl-g + cc*sl, 0, -hw - sc*sl));
-    add_chain(w, v3(hl + sc*sl, 0, -hw+g - cc*sl),  v3(hl, 0, -hw+g),
-                 v3(hl, 0, hw-g),                   v3(hl + sc*sl, 0, hw-g + cc*sl));
-    add_chain(w, v3(hl-g + cc*sl, 0, hw + sc*sl),   v3(hl-g, 0, hw),
-                 v3(sg, 0, hw),                     v3(sg - cs*sl, 0, hw + ss*sl));
-    add_chain(w, v3(-sg + cs*sl, 0, hw + ss*sl),    v3(-sg, 0, hw),
-                 v3(-hl+g, 0, hw),                  v3(-hl+g - cc*sl, 0, hw + sc*sl));
-    add_chain(w, v3(-hl - sc*sl, 0, hw-g + cc*sl),  v3(-hl, 0, hw-g),
-                 v3(-hl, 0, -hw+g),                 v3(-hl - sc*sl, 0, -hw+g - cc*sl));
+    if (!t->pocket_round) {
+        /* US pool: straight mitred facings. */
+        const float g = t->gap_corner, sg = t->gap_side, sl = t->facing_len;
+        const float cc = cosf(t->ang_corner*DEG), sc = sinf(t->ang_corner*DEG);
+        const float cs = cosf(t->ang_side*DEG),   ss = sinf(t->ang_side*DEG);
+        add_chain(w, v3(-hl+g - cc*sl, 0, -hw - sc*sl), v3(-hl+g, 0, -hw),
+                     v3(-sg, 0, -hw),                   v3(-sg + cs*sl, 0, -hw - ss*sl));
+        add_chain(w, v3(sg - cs*sl, 0, -hw - ss*sl),    v3(sg, 0, -hw),
+                     v3(hl-g, 0, -hw),                  v3(hl-g + cc*sl, 0, -hw - sc*sl));
+        add_chain(w, v3(hl + sc*sl, 0, -hw+g - cc*sl),  v3(hl, 0, -hw+g),
+                     v3(hl, 0, hw-g),                   v3(hl + sc*sl, 0, hw-g + cc*sl));
+        add_chain(w, v3(hl-g + cc*sl, 0, hw + sc*sl),   v3(hl-g, 0, hw),
+                     v3(sg, 0, hw),                     v3(sg - cs*sl, 0, hw + ss*sl));
+        add_chain(w, v3(-sg + cs*sl, 0, hw + ss*sl),    v3(-sg, 0, hw),
+                     v3(-hl+g, 0, hw),                  v3(-hl+g - cc*sl, 0, hw + sc*sl));
+        add_chain(w, v3(-hl - sc*sl, 0, hw-g + cc*sl),  v3(-hl, 0, hw-g),
+                     v3(-hl, 0, -hw+g),                 v3(-hl - sc*sl, 0, -hw+g - cc*sl));
+    } else {
+        /* Snooker/UK: bezier-curved jaws bulging into the pocket (rounded
+         * knuckles), matching the 2D game's createCurvedRailChains. */
+        const float bg = t->pr_corner + 0.5f*R;
+        const float cgap = bg + 0.333f*R, mgap = bg + 0.583f*R;
+        const float cl = 2.0f*R, ml = 1.6f*R, e3 = 0.25f*R;
+        const float ca = 0.6f, ma = 0.7f; const int nc = 3, nm = 3;
+        /* C1 top-left */
+        add_curved_chain(w, v3(-hl+cgap - cl*0.7f - e3,0,-hw - cl*0.7f), v3(-hl+cgap,0,-hw),
+                            v3(-mgap,0,-hw), v3(-bg + ml*0.3f + e3,0,-hw - ml), ca, ma, nc, nm);
+        /* C2 top-right */
+        add_curved_chain(w, v3(bg - ml*0.3f - e3,0,-hw - ml), v3(mgap,0,-hw),
+                            v3(hl-cgap,0,-hw), v3(hl-cgap + cl*0.7f + e3,0,-hw - cl*0.7f), ma, ca, nm, nc);
+        /* C3 right */
+        add_curved_chain(w, v3(hl + cl*0.7f,0,-hw+cgap - cl*0.7f - e3), v3(hl,0,-hw+cgap),
+                            v3(hl,0,hw-cgap), v3(hl + cl*0.7f,0,hw-cgap + cl*0.7f + e3), ca, ca, nc, nc);
+        /* C4 bottom-right */
+        add_curved_chain(w, v3(hl-cgap + cl*0.7f + e3,0,hw + cl*0.7f), v3(hl-cgap,0,hw),
+                            v3(mgap,0,hw), v3(bg - ml*0.3f - e3,0,hw + ml), ca, ma, nc, nm);
+        /* C5 bottom-left */
+        add_curved_chain(w, v3(-bg + ml*0.3f + e3,0,hw + ml), v3(-mgap,0,hw),
+                            v3(-hl+cgap,0,hw), v3(-hl+cgap - cl*0.7f - e3,0,hw + cl*0.7f), ma, ca, nm, nc);
+        /* C6 left */
+        add_curved_chain(w, v3(-hl - cl*0.7f,0,hw-cgap + cl*0.7f + e3), v3(-hl,0,hw-cgap),
+                            v3(-hl,0,-hw+cgap), v3(-hl - cl*0.7f,0,-hw+cgap - cl*0.7f - e3), ca, ca, nc, nc);
+    }
 
     /* Pocket circles: centre offset just beyond the boundary; drop-capture
      * when the ball centre is within (radius − 0.3R), matching the 2D game. */

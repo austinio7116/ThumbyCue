@@ -125,10 +125,19 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         Vec3 n = sg->n;
         Vec3 a0 = v3(sg->a.x, 0, sg->a.z), b0 = v3(sg->b.x, 0, sg->b.z);
         Vec3 an = v3(sg->a.x, nose_h, sg->a.z), bn = v3(sg->b.x, nose_h, sg->b.z);
-        quad(a0, b0, bn, an, face);
-        Vec3 ar = v3(sg->a.x - n.x * cw, rail_h, sg->a.z - n.z * cw);
-        Vec3 br = v3(sg->b.x - n.x * cw, rail_h, sg->b.z - n.z * cw);
-        quad(an, bn, br, ar, ctop);
+        quad(a0, b0, bn, an, face);            /* steep playing face (the jaw) */
+        if (sg->kind == 0) {
+            /* straight rail: cloth top sloping back to the rail */
+            Vec3 ar = v3(sg->a.x - n.x * cw, rail_h, sg->a.z - n.z * cw);
+            Vec3 br = v3(sg->b.x - n.x * cw, rail_h, sg->b.z - n.z * cw);
+            quad(an, bn, br, ar, ctop);
+        } else {
+            /* pocket facing: a thin FLAT cloth top only — extruding it back up
+             * to the rail makes a flap that pokes into the pocket void. */
+            Vec3 ar = v3(sg->a.x - n.x * cw * 0.5f, nose_h, sg->a.z - n.z * cw * 0.5f);
+            Vec3 br = v3(sg->b.x - n.x * cw * 0.5f, nose_h, sg->b.z - n.z * cw * 0.5f);
+            quad(an, bn, br, ar, ctop);
+        }
     }
 
     /* Wood rail frame: full rectangular ring (the pocket caps punch holes
@@ -155,19 +164,20 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     for (int p = 0; p < w->npocket; p++) {
         float cx = w->pocket[p].x, cz = w->pocket[p].z;
         float r = (p < 4) ? t->pr_corner : t->pr_side;
-        float ol = sqrtf(cx * cx + cz * cz);
-        float outx = (ol > 1e-5f) ? cx / ol : 0, outz = (ol > 1e-5f) ? cz / ol : 1;
         Vec3 cap_c = v3(cx, cap_y, cz), floor_c = v3(cx, floor_y, cz);
-        const int N = 16;
+        const int N = 20;
         for (int k = 0; k < N; k++) {
             float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
             float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
-            float am = 0.5f * (a0 + a1);
-            int outer = (cosf(am) * outx + sinf(am) * outz) > 0.0f;  /* over frame */
+            float mx = cx + r * cosf(0.5f*(a0+a1)), mz = cz + r * sinf(0.5f*(a0+a1));
+            /* Cap exactly where the wood frame actually is (the rail ring,
+             * outside the cushion-back rectangle) — flush, no floating cap over
+             * the playing side and no uncapped frame sliver. */
+            int over_frame = (fabsf(mx) > ibx || fabsf(mz) > ibz);
             Vec3 bed0 = v3(cx + r*c0, -0.002f, cz + r*s0);
             Vec3 bed1 = v3(cx + r*c1, -0.002f, cz + r*s1);
             tri(floor_c, bed0, bed1, pk_floor);              /* recess cone floor */
-            if (outer) {
+            if (over_frame) {
                 Vec3 top0 = v3(cx + r*c0, cap_y, cz + r*s0);
                 Vec3 top1 = v3(cx + r*c1, cap_y, cz + r*s1);
                 tri(cap_c, top0, top1, pk_wall);             /* punch frame (flush) */
@@ -176,21 +186,6 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         }
     }
 
-    /* Knuckle posts (snooker rounded knuckles read; pool points are tiny). */
-    if (s_is_snooker) {
-        uint16_t knub = shade565(t->cloth, 0.62f);
-        for (int j = 0; j < w->njaw; j++) {
-            Vec3 c = w->jaw[j]; float r = t->jaw_r;
-            const int N = 6;
-            for (int k = 0; k < N; k++) {
-                float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
-                Vec3 p0 = v3(c.x + r * cosf(a0), 0, c.z + r * sinf(a0));
-                Vec3 p1 = v3(c.x + r * cosf(a1), 0, c.z + r * sinf(a1));
-                Vec3 q0 = v3(p0.x, nose_h, p0.z), q1 = v3(p1.x, nose_h, p1.z);
-                quad(p0, p1, q1, q0, knub);
-            }
-        }
-    }
 }
 
 /* ---- per-frame build --------------------------------------------------- */
