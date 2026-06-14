@@ -20,44 +20,49 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
     memset(t, 0, sizeof(*t));
     t->kind = kind;
     if (kind == CUE_GAME_POOL) {
-        /* 7 ft US pool: 1.98 × 0.99 m, 2.25" balls. */
+        /* 7 ft US pool: 1.98 × 0.99 m, 2.25" balls. Pocket geometry follows
+         * the 2D game's ratios (pocket≈2.17R, knuckle gap≈2.67R, 45°/70°). */
         t->half_len = 1.98f * 0.5f;
         t->half_wid = 0.99f * 0.5f;
         t->R = 0.028575f;
         t->mass = 0.170f;
         t->cushion_h = 1.27f * t->R;
         t->rail_w = 0.075f;
-        t->pocket_round = 0;             /* straight mitred facings */
-        t->mouth_corner = 0.1143f;       /* 4.5" */
-        t->mouth_side = 0.127f;          /* 5"   */
-        t->facing_len = 0.055f;
-        t->cut_corner_deg = 142.0f;
-        t->cut_side_deg = 104.0f;
-        t->jaw_r = 0.006f;               /* sharp rubber point */
-        t->cap_corner = t->mouth_corner * 0.5f;
-        t->cap_side = t->mouth_side * 0.5f;
+        t->pocket_round = 0;
+        t->pr_corner  = 2.167f * t->R;
+        t->pr_side    = 1.95f  * t->R;
+        t->gap_corner = 2.667f * t->R;
+        t->gap_side   = 2.50f  * t->R;
+        t->facing_len = 1.667f * t->R;
+        t->ang_corner = 45.0f;
+        t->ang_side   = 70.0f;
+        t->off_corner = 0.42f * t->R;
+        t->off_side   = 1.25f * t->R;
+        t->jaw_r      = 0.004f;
         t->cloth = RGB565C(22, 120, 70);
         t->rail = RGB565C(96, 54, 26);
         t->rail_top = RGB565C(128, 78, 38);
         t->spot = RGB565C(180, 180, 180);
         t->nballs = 16;
     } else {
-        /* 12 ft snooker: 3.569 × 1.778 m, 52.5 mm balls. */
+        /* 12 ft snooker: tighter, rounder pockets (steeper facings). */
         t->half_len = 3.569f * 0.5f;
         t->half_wid = 1.778f * 0.5f;
         t->R = 0.0262500f;
         t->mass = 0.142f;
         t->cushion_h = 1.27f * t->R;
         t->rail_w = 0.085f;
-        t->pocket_round = 1;             /* rounded knuckles */
-        t->mouth_corner = 0.0889f;       /* 3.5" */
-        t->mouth_side = 0.099f;          /* ~3.9" */
-        t->facing_len = 0.030f;
-        t->cut_corner_deg = 150.0f;      /* short facing, rounding dominates */
-        t->cut_side_deg = 120.0f;
-        t->jaw_r = 0.0135f;              /* big rounded knuckle */
-        t->cap_corner = t->mouth_corner * 0.5f;
-        t->cap_side = t->mouth_side * 0.5f;
+        t->pocket_round = 1;
+        t->pr_corner  = 1.85f * t->R;
+        t->pr_side    = 1.70f * t->R;
+        t->gap_corner = 2.30f * t->R;
+        t->gap_side   = 2.05f * t->R;
+        t->facing_len = 1.25f * t->R;
+        t->ang_corner = 60.0f;          /* steeper = rounder mouth */
+        t->ang_side   = 80.0f;
+        t->off_corner = 0.30f * t->R;
+        t->off_side   = 1.00f * t->R;
+        t->jaw_r      = 0.012f;
         t->baulk_x = -t->half_len + 0.737f;
         t->d_radius = 0.292f;
         t->blue_x = 0.0f;
@@ -98,26 +103,16 @@ static void add_pocket(CueWorld *w, float x, float z, float cap) {
     w->pocket_r[i] = cap;
 }
 
-/* One facing from knuckle K: rotate the into-cushion direction t by the cut
- * angle toward the back (−nin) and run facing_len into the throat. */
-static void add_facing(CueWorld *w, Vec3 K, Vec3 t, Vec3 nin,
-                       float cut_deg, float len) {
-    float A = cut_deg * DEG;
-    Vec3 fdir = v3_norm(v3_add(v3_scale(t, cosf(A)), v3_scale(nin, -sinf(A))));
-    Vec3 F = v3_add(K, v3_scale(fdir, len));
-    add_seg(w, K, F, 1);
-}
-
-/* A cushion: straight nose K1→K2, a facing at each end, knuckle circles. */
-static void add_cushion(CueWorld *w, Vec3 K1, Vec3 K2,
-                        float cutA1, float cutA2, float flen) {
-    add_seg(w, K1, K2, 0);
-    Vec3 nin = inward_n(K1.x, K1.z, K2.x, K2.z);
-    Vec3 t1 = v3_norm(v3_sub(K2, K1));
-    add_facing(w, K1, t1, nin, cutA1, flen);
-    add_facing(w, K2, v3_scale(t1, -1.0f), nin, cutA2, flen);
-    add_jaw(w, K1);
-    add_jaw(w, K2);
+/* A cushion chain (faithful to the 2D model): facing-tip P1 → knuckle P2 →
+ * knuckle P3 → facing-tip P4. Segments: P1-P2 facing, P2-P3 nose, P3-P4 facing.
+ * Knuckle circles sit at P2,P3. P2,P3 are pushed into w->jaw in boundary order
+ * so the renderer can fan the bed straight off them. */
+static void add_chain(CueWorld *w, Vec3 P1, Vec3 P2, Vec3 P3, Vec3 P4) {
+    add_seg(w, P1, P2, 1);
+    add_seg(w, P2, P3, 0);
+    add_seg(w, P3, P4, 1);
+    add_jaw(w, P2);
+    add_jaw(w, P3);
 }
 
 void cue_table_build_world(const CueTable *t, CueWorld *w) {
@@ -126,34 +121,35 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
     w->jaw_r = t->jaw_r;
 
     const float hl = t->half_len, hw = t->half_wid;
-    const float ac = t->mouth_corner * 0.70710678f;  /* corner setback */
-    const float as = t->mouth_side * 0.5f;            /* side setback   */
-    const float cc = t->cut_corner_deg, cs = t->cut_side_deg, fl = t->facing_len;
+    const float g = t->gap_corner, sg = t->gap_side, sl = t->facing_len;
+    const float cc = cosf(t->ang_corner * DEG), sc = sinf(t->ang_corner * DEG);
+    const float cs = cosf(t->ang_side * DEG),   ss = sinf(t->ang_side * DEG);
 
-    /* Knuckle points (nose level). */
-    Vec3 TLt = v3(-hl + ac, 0, hw), TRt = v3(hl - ac, 0, hw);
-    Vec3 BLt = v3(-hl + ac, 0, -hw), BRt = v3(hl - ac, 0, -hw);
-    Vec3 sTL = v3(-as, 0, hw), sTR = v3(as, 0, hw);
-    Vec3 sBL = v3(-as, 0, -hw), sBR = v3(as, 0, -hw);
-    Vec3 TRr = v3(hl, 0, hw - ac), BRr = v3(hl, 0, -hw + ac);
-    Vec3 TLr = v3(-hl, 0, hw - ac), BLr = v3(-hl, 0, -hw + ac);
+    /* Six cushion chains. Facings splay OUTWARD (|z|>hw on long rails, |x|>hl
+     * on short rails). Top = −Z, bottom = +Z, left = −X, right = +X. */
+    add_chain(w, v3(-hl+g - cc*sl, 0, -hw - sc*sl), v3(-hl+g, 0, -hw),
+                 v3(-sg, 0, -hw),                   v3(-sg + cs*sl, 0, -hw - ss*sl));
+    add_chain(w, v3(sg - cs*sl, 0, -hw - ss*sl),    v3(sg, 0, -hw),
+                 v3(hl-g, 0, -hw),                  v3(hl-g + cc*sl, 0, -hw - sc*sl));
+    add_chain(w, v3(hl + sc*sl, 0, -hw+g - cc*sl),  v3(hl, 0, -hw+g),
+                 v3(hl, 0, hw-g),                   v3(hl + sc*sl, 0, hw-g + cc*sl));
+    add_chain(w, v3(hl-g + cc*sl, 0, hw + sc*sl),   v3(hl-g, 0, hw),
+                 v3(sg, 0, hw),                     v3(sg - cs*sl, 0, hw + ss*sl));
+    add_chain(w, v3(-sg + cs*sl, 0, hw + ss*sl),    v3(-sg, 0, hw),
+                 v3(-hl+g, 0, hw),                  v3(-hl+g - cc*sl, 0, hw + sc*sl));
+    add_chain(w, v3(-hl - sc*sl, 0, hw-g + cc*sl),  v3(-hl, 0, hw-g),
+                 v3(-hl, 0, -hw+g),                 v3(-hl - sc*sl, 0, -hw+g - cc*sl));
 
-    /* Six cushions (corner end uses the corner cut, side end the side cut). */
-    add_cushion(w, TLt, sTL, cc, cs, fl);   /* top-left   */
-    add_cushion(w, sTR, TRt, cs, cc, fl);   /* top-right  */
-    add_cushion(w, BLt, sBL, cc, cs, fl);   /* bottom-left*/
-    add_cushion(w, sBR, BRt, cs, cc, fl);   /* bottom-right*/
-    add_cushion(w, TRr, BRr, cc, cc, fl);   /* right      */
-    add_cushion(w, TLr, BLr, cc, cc, fl);   /* left       */
-
-    /* Drop-capture points, set into each throat by ~0.8 ball radii. */
-    float ri = t->R * 0.8f, s = 0.70710678f;
-    add_pocket(w, hl - ac * 0.5f + s * ri, hw - ac * 0.5f + s * ri, t->cap_corner);
-    add_pocket(w, -hl + ac * 0.5f - s * ri, hw - ac * 0.5f + s * ri, t->cap_corner);
-    add_pocket(w, hl - ac * 0.5f + s * ri, -hw + ac * 0.5f - s * ri, t->cap_corner);
-    add_pocket(w, -hl + ac * 0.5f - s * ri, -hw + ac * 0.5f - s * ri, t->cap_corner);
-    add_pocket(w, 0.0f, hw + ri, t->cap_side);
-    add_pocket(w, 0.0f, -hw - ri, t->cap_side);
+    /* Pocket circles: centre offset just beyond the boundary; drop-capture
+     * when the ball centre is within (radius − 0.3R), matching the 2D game. */
+    const float d = 0.70710678f, oc = t->off_corner, os = t->off_side;
+    float capc = t->pr_corner - 0.3f * t->R, caps = t->pr_side - 0.3f * t->R;
+    add_pocket(w, -hl - oc*d, -hw - oc*d, capc);
+    add_pocket(w,  hl + oc*d, -hw - oc*d, capc);
+    add_pocket(w,  hl + oc*d,  hw + oc*d, capc);
+    add_pocket(w, -hl - oc*d,  hw + oc*d, capc);
+    add_pocket(w, 0.0f, -hw - os, caps);
+    add_pocket(w, 0.0f,  hw + os, caps);
 }
 
 Vec3 cue_table_cue_home(const CueTable *t) {

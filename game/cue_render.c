@@ -105,13 +105,19 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     const float rail_h = t->cushion_h * 1.75f;
     uint16_t wood = t->rail, woodt = t->rail_top;
 
-    /* Cloth bed. */
-    quad(v3(-hl, 0, -hw), v3(hl, 0, -hw), v3(hl, 0, hw), v3(-hl, 0, hw), t->cloth);
+    /* Cloth bed — fanned from the centre over the knuckle boundary (w->jaw is
+     * stored in boundary order), so the felt edge follows the cushion noses
+     * and the pocket MOUTHS are real gaps (the angled jaws stay visible). */
+    int nb = w->njaw;
+    for (int i = 0; i < nb; i++) {
+        Vec3 a = v3(w->jaw[i].x, 0, w->jaw[i].z);
+        Vec3 b = v3(w->jaw[(i + 1) % nb].x, 0, w->jaw[(i + 1) % nb].z);
+        tri(v3(0, 0, 0), a, b, t->cloth);
+    }
 
-    /* Cushions from the shared segment list: steep cloth playing face up to
-     * the nose, then a cloth top sloping back to the cushion's back edge.
-     * Because the segments already include the angled/rounded pocket facings,
-     * the jaws are modelled here automatically. */
+    /* Cushions from the chain segments: steep cloth playing face up to the
+     * nose, then a cloth top sloping back to the cushion back. The facings
+     * (which splay outward) shape the jaws automatically. */
     uint16_t face = shade565(t->cloth, 0.66f);
     uint16_t ctop = shade565(t->cloth, 0.90f);
     for (int s = 0; s < w->nseg; s++) {
@@ -125,50 +131,48 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         quad(an, bn, br, ar, ctop);
     }
 
-    /* Wood rail frame as a FULL rectangular ring (covers the corners and the
-     * area behind every pocket). The dark pocket caps below punch the holes
-     * through it, so the frame correctly wraps around each pocket. */
-    const float fw = rw + 0.030f;        /* frame width (cushion-back → edge) */
+    /* Wood rail frame: full rectangular ring (the pocket caps punch holes
+     * through it, flush with the rail). */
+    const float fw = rw + 0.030f;
     const float ox = hl + fw, oz = hw + fw;
-    const float ibx = hl + cw, ibz = hw + cw;   /* cushion-back rectangle */
+    const float ibx = hl + cw, ibz = hw + cw;
     quad(v3(-ox,rail_h,ibz), v3(ox,rail_h,ibz), v3(ox,rail_h,oz), v3(-ox,rail_h,oz), woodt);
     quad(v3(-ox,rail_h,-oz), v3(ox,rail_h,-oz), v3(ox,rail_h,-ibz), v3(-ox,rail_h,-ibz), woodt);
     quad(v3(-ox,rail_h,-ibz), v3(-ibx,rail_h,-ibz), v3(-ibx,rail_h,ibz), v3(-ox,rail_h,ibz), woodt);
     quad(v3(ibx,rail_h,-ibz), v3(ox,rail_h,-ibz), v3(ox,rail_h,ibz), v3(ibx,rail_h,ibz), woodt);
-    /* outer skirt walls (table thickness) */
     quad(v3(-ox,rail_h,oz), v3(ox,rail_h,oz), v3(ox,0,oz), v3(-ox,0,oz), wood);
     quad(v3(ox,rail_h,-oz), v3(-ox,rail_h,-oz), v3(-ox,0,-oz), v3(ox,0,-oz), wood);
     quad(v3(ox,rail_h,oz), v3(ox,rail_h,-oz), v3(ox,0,-oz), v3(ox,0,oz), wood);
     quad(v3(-ox,rail_h,-oz), v3(-ox,rail_h,oz), v3(-ox,0,oz), v3(-ox,0,-oz), wood);
 
-    /* Pocket holes: a dark cap punched through the frame (just ABOVE rail
-     * height, so it wins the depth test over both the wood and the bed) plus a
-     * dark wall dropping below — a clean recessed hole that the wood wraps
-     * around. Corner caps sit on the corner point; side caps are nudged
-     * outward so they don't bulge into the playing area. */
-    uint16_t pk_dark = RGB565C(8, 10, 10), pk_wall = RGB565C(3, 4, 4);
-    float cr = t->mouth_corner * 0.72f;       /* corner = circle */
-    float sox = t->mouth_side * 0.62f;        /* side: wide along the rail */
-    float soz = t->mouth_side * 0.42f;        /* side: shallow into the table */
-    float scz = hw + t->mouth_side * 0.12f;   /* nudged just past the nose line */
-    /* x, z, rx, rz : corner pockets are circles, side pockets ellipses. */
-    struct { float x, z, rx, rz; } pk[6] = {
-        {  hl, hw, cr, cr }, { -hl, hw, cr, cr },
-        {  hl,-hw, cr, cr }, { -hl,-hw, cr, cr },
-        { 0.0f,  scz, sox, soz }, { 0.0f, -scz, sox, soz },
-    };
-    const float cap_y = rail_h + 0.002f, floor_y = -0.05f;
-    for (int p = 0; p < 6; p++) {
-        float cx = pk[p].x, cz = pk[p].z, rx = pk[p].rx, rz = pk[p].rz;
-        Vec3 capc = v3(cx, cap_y, cz);
-        const int N = 14;
+    /* Pockets = circular VOIDS you look down into. The bed is already cut at
+     * the mouth, so a downward cone gives the recess. The OUTWARD half of each
+     * pocket (the half sitting over the wood frame) gets a flush rail-level cap
+     * + a frame-thickness wall to punch the hole through the wood; the inward
+     * (mouth) half is left open so nothing floats above the playing surface. */
+    uint16_t pk_wall = RGB565C(9, 11, 11), pk_floor = RGB565C(3, 4, 4);
+    const float cap_y = rail_h + 0.002f, floor_y = -0.055f;
+    for (int p = 0; p < w->npocket; p++) {
+        float cx = w->pocket[p].x, cz = w->pocket[p].z;
+        float r = (p < 4) ? t->pr_corner : t->pr_side;
+        float ol = sqrtf(cx * cx + cz * cz);
+        float outx = (ol > 1e-5f) ? cx / ol : 0, outz = (ol > 1e-5f) ? cz / ol : 1;
+        Vec3 cap_c = v3(cx, cap_y, cz), floor_c = v3(cx, floor_y, cz);
+        const int N = 16;
         for (int k = 0; k < N; k++) {
             float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
-            Vec3 r0 = v3(cx + rx * cosf(a0), cap_y, cz + rz * sinf(a0));
-            Vec3 r1 = v3(cx + rx * cosf(a1), cap_y, cz + rz * sinf(a1));
-            tri(capc, r0, r1, pk_dark);                         /* punch cap */
-            Vec3 d0 = v3(r0.x, floor_y, r0.z), d1 = v3(r1.x, floor_y, r1.z);
-            quad(r0, r1, d1, d0, pk_wall);                      /* wall down */
+            float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+            float am = 0.5f * (a0 + a1);
+            int outer = (cosf(am) * outx + sinf(am) * outz) > 0.0f;  /* over frame */
+            Vec3 bed0 = v3(cx + r*c0, -0.002f, cz + r*s0);
+            Vec3 bed1 = v3(cx + r*c1, -0.002f, cz + r*s1);
+            tri(floor_c, bed0, bed1, pk_floor);              /* recess cone floor */
+            if (outer) {
+                Vec3 top0 = v3(cx + r*c0, cap_y, cz + r*s0);
+                Vec3 top1 = v3(cx + r*c1, cap_y, cz + r*s1);
+                tri(cap_c, top0, top1, pk_wall);             /* punch frame (flush) */
+                quad(top0, top1, bed1, bed0, pk_wall);       /* frame-thickness wall */
+            }
         }
     }
 

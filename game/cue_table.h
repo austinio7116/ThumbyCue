@@ -31,18 +31,19 @@ typedef struct {
     float cushion_h;            /* nose height above cloth (m) */
     float rail_w;               /* rail/frame width, render only (m) */
 
-    /* Pocket-jaw model (the crux of play). Two families:
-     *   pocket_round = 0 → US pool: straight mitred facings, sharp points,
-     *                      corner cut 142°, side cut ~104°.
-     *   pocket_round = 1 → snooker/UK: rounded knuckles (arc), no points. */
+    /* Pocket-jaw model (faithful to the 2D game's geometry). Each cushion is a
+     * 4-point chain: facing-tip → knuckle → knuckle → facing-tip, the facings
+     * splaying OUTWARD (away from the playing area) at the pocket angle. The
+     * pocket itself is a circle of radius pr_* centred just outside the rail.
+     *   pocket_round = 0 → US pool (45° corner / 70° side facings)
+     *   pocket_round = 1 → snooker/UK (tighter, more rounded). */
     int   pocket_round;
-    float mouth_corner;         /* opening between knuckle tips, corner (m) */
-    float mouth_side;           /* opening, side/middle pocket (m) */
-    float facing_len;           /* throat depth of a facing (m) */
-    float cut_corner_deg;       /* facing splay vs rail, corner */
-    float cut_side_deg;         /* facing splay vs rail, side */
-    float jaw_r;                /* knuckle radius (sharp point / rounded jaw) */
-    float cap_corner, cap_side; /* drop-capture radii in the throat */
+    float pr_corner, pr_side;   /* pocket hole radius (m) */
+    float gap_corner, gap_side; /* knuckle setback from corner / from centre (m) */
+    float facing_len;           /* facing length (m) */
+    float ang_corner, ang_side; /* facing splay from the rail line (deg) */
+    float off_corner, off_side; /* pocket-centre offset beyond the boundary (m) */
+    float jaw_r;                /* small knuckle rounding radius (m) */
 
     /* Snooker layout (ignored for pool). */
     float baulk_x, d_radius, blue_x, pink_x, black_x;
