@@ -28,9 +28,11 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->mass = 0.170f;
         t->cushion_h = 1.27f * t->R;
         t->rail_w = 0.075f;
-        t->pocket_round = 0;
-        t->pr_corner  = 2.167f * t->R;
-        t->pr_side    = 1.95f  * t->R;
+        /* UK-style 8-ball: rounded (curved) pocket jaws, a touch more open than
+         * snooker. (US straight-mitre pockets would set pocket_round = 0.) */
+        t->pocket_round = 1;
+        t->pr_corner  = 2.15f * t->R;
+        t->pr_side    = 1.95f * t->R;
         t->gap_corner = 2.667f * t->R;
         t->gap_side   = 2.50f  * t->R;
         t->facing_len = 1.667f * t->R;

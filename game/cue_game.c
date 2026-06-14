@@ -183,6 +183,9 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
             for (int i = 1; i < s_n; i++) if (s_balls[i].on) on++;
             s_potted = (s_n - 1) - on;
             s_power = 0; s_tip_side = s_tip_vert = 0;
+            /* keep the camera where the player left it during the shot — aim
+             * from that angle, no snap-back jump. */
+            s_aim = s_view_az;
             s_state = GS_AIM;
         }
     }

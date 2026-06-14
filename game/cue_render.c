@@ -134,6 +134,11 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             const CueSeg *nx = &w->seg[s+1];
             if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) nb = v3_norm(v3_add(sg->n, nx->n));
         }
+        /* Force the back offset (node − n·cw) to go AWAY from the table centre,
+         * so a cushion top can never flap into the pocket — symmetric by
+         * construction regardless of segment orientation. */
+        if (na.x * sg->a.x + na.z * sg->a.z > 0.0f) na = v3_scale(na, -1.0f);
+        if (nb.x * sg->b.x + nb.z * sg->b.z > 0.0f) nb = v3_scale(nb, -1.0f);
         Vec3 a0 = v3(sg->a.x, 0, sg->a.z), b0 = v3(sg->b.x, 0, sg->b.z);
         Vec3 an = v3(sg->a.x, nose_h, sg->a.z), bn = v3(sg->b.x, nose_h, sg->b.z);
         Vec3 ar = v3(sg->a.x - na.x*cw, rail_h, sg->a.z - na.z*cw);
