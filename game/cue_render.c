@@ -12,8 +12,8 @@
 
 /* ---- static table mesh (world space) ---------------------------------- */
 typedef struct { Vec3 v[3]; Vec3 nrm; uint16_t color; } CueTri;
-#define MAX_TABLE_TRI 360
-#define MAX_STRI      720      /* near-clipping can split a tri into two */
+#define MAX_TABLE_TRI 560
+#define MAX_STRI      980      /* near-clipping can split a tri into two */
 static CueTri   s_tab[MAX_TABLE_TRI];
 static int      s_ntab;
 static uint16_t s_cloth, s_bg_top, s_bg_bot;
@@ -125,59 +125,66 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         quad(an, bn, br, ar, ctop);
     }
 
-    /* Wood rail frame: one strip behind each STRAIGHT rail segment, from the
-     * cushion back out to the table edge. Stops at the knuckles, so the
-     * pocket mouths stay open (no wood covering the pockets). */
-    for (int s = 0; s < w->nseg; s++) {
-        const CueSeg *sg = &w->seg[s];
-        if (sg->kind != 0) continue;               /* skip facings */
-        Vec3 n = sg->n;
-        Vec3 ai = v3(sg->a.x - n.x * cw, rail_h, sg->a.z - n.z * cw);
-        Vec3 bi = v3(sg->b.x - n.x * cw, rail_h, sg->b.z - n.z * cw);
-        Vec3 ao = v3(sg->a.x - n.x * rw, rail_h, sg->a.z - n.z * rw);
-        Vec3 bo = v3(sg->b.x - n.x * rw, rail_h, sg->b.z - n.z * rw);
-        quad(ai, bi, bo, ao, woodt);
-        /* outer skirt (vertical wall) for visible table thickness */
-        quad(ao, bo, v3(bo.x, 0, bo.z), v3(ao.x, 0, ao.z), wood);
-    }
+    /* Wood rail frame as a FULL rectangular ring (covers the corners and the
+     * area behind every pocket). The dark pocket caps below punch the holes
+     * through it, so the frame correctly wraps around each pocket. */
+    const float fw = rw + 0.030f;        /* frame width (cushion-back → edge) */
+    const float ox = hl + fw, oz = hw + fw;
+    const float ibx = hl + cw, ibz = hw + cw;   /* cushion-back rectangle */
+    quad(v3(-ox,rail_h,ibz), v3(ox,rail_h,ibz), v3(ox,rail_h,oz), v3(-ox,rail_h,oz), woodt);
+    quad(v3(-ox,rail_h,-oz), v3(ox,rail_h,-oz), v3(ox,rail_h,-ibz), v3(-ox,rail_h,-ibz), woodt);
+    quad(v3(-ox,rail_h,-ibz), v3(-ibx,rail_h,-ibz), v3(-ibx,rail_h,ibz), v3(-ox,rail_h,ibz), woodt);
+    quad(v3(ibx,rail_h,-ibz), v3(ox,rail_h,-ibz), v3(ox,rail_h,ibz), v3(ibx,rail_h,ibz), woodt);
+    /* outer skirt walls (table thickness) */
+    quad(v3(-ox,rail_h,oz), v3(ox,rail_h,oz), v3(ox,0,oz), v3(-ox,0,oz), wood);
+    quad(v3(ox,rail_h,-oz), v3(-ox,rail_h,-oz), v3(-ox,0,-oz), v3(ox,0,-oz), wood);
+    quad(v3(ox,rail_h,oz), v3(ox,rail_h,-oz), v3(ox,0,-oz), v3(ox,0,oz), wood);
+    quad(v3(-ox,rail_h,-oz), v3(-ox,rail_h,oz), v3(-ox,0,oz), v3(-ox,0,-oz), wood);
 
-    /* Pocket openings at their true geometric spots (corner points & long-rail
-     * midpoints). Each is a dark disc sitting JUST above the bed (so it wins
-     * the depth test over the green and reads as a clean hole from any angle)
-     * with a wall ring dropping below for depth. */
-    uint16_t pk_top = RGB565C(10, 12, 12), pk_wall = RGB565C(3, 4, 4);
-    struct { float x, z, r; } pk[6] = {
-        {  hl,  hw, t->mouth_corner * 0.62f }, { -hl,  hw, t->mouth_corner * 0.62f },
-        {  hl, -hw, t->mouth_corner * 0.62f }, { -hl, -hw, t->mouth_corner * 0.62f },
-        { 0.0f, hw, t->mouth_side * 0.56f },   { 0.0f, -hw, t->mouth_side * 0.56f },
+    /* Pocket holes: a dark cap punched through the frame (just ABOVE rail
+     * height, so it wins the depth test over both the wood and the bed) plus a
+     * dark wall dropping below — a clean recessed hole that the wood wraps
+     * around. Corner caps sit on the corner point; side caps are nudged
+     * outward so they don't bulge into the playing area. */
+    uint16_t pk_dark = RGB565C(8, 10, 10), pk_wall = RGB565C(3, 4, 4);
+    float cr = t->mouth_corner * 0.72f;       /* corner = circle */
+    float sox = t->mouth_side * 0.62f;        /* side: wide along the rail */
+    float soz = t->mouth_side * 0.42f;        /* side: shallow into the table */
+    float scz = hw + t->mouth_side * 0.12f;   /* nudged just past the nose line */
+    /* x, z, rx, rz : corner pockets are circles, side pockets ellipses. */
+    struct { float x, z, rx, rz; } pk[6] = {
+        {  hl, hw, cr, cr }, { -hl, hw, cr, cr },
+        {  hl,-hw, cr, cr }, { -hl,-hw, cr, cr },
+        { 0.0f,  scz, sox, soz }, { 0.0f, -scz, sox, soz },
     };
-    const float yt = 0.005f, yb = -0.05f;
+    const float cap_y = rail_h + 0.002f, floor_y = -0.05f;
     for (int p = 0; p < 6; p++) {
-        float cx = pk[p].x, cz = pk[p].z, r = pk[p].r;
-        Vec3 ctr = v3(cx, yt, cz);
-        const int N = 16;
+        float cx = pk[p].x, cz = pk[p].z, rx = pk[p].rx, rz = pk[p].rz;
+        Vec3 capc = v3(cx, cap_y, cz);
+        const int N = 14;
         for (int k = 0; k < N; k++) {
             float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
-            Vec3 e0 = v3(cx + r * cosf(a0), yt, cz + r * sinf(a0));
-            Vec3 e1 = v3(cx + r * cosf(a1), yt, cz + r * sinf(a1));
-            tri(ctr, e0, e1, pk_top);                          /* opening disc */
-            Vec3 e0b = v3(e0.x, yb, e0.z), e1b = v3(e1.x, yb, e1.z);
-            quad(e0, e1, e1b, e0b, pk_wall);                   /* wall down */
+            Vec3 r0 = v3(cx + rx * cosf(a0), cap_y, cz + rz * sinf(a0));
+            Vec3 r1 = v3(cx + rx * cosf(a1), cap_y, cz + rz * sinf(a1));
+            tri(capc, r0, r1, pk_dark);                         /* punch cap */
+            Vec3 d0 = v3(r0.x, floor_y, r0.z), d1 = v3(r1.x, floor_y, r1.z);
+            quad(r0, r1, d1, d0, pk_wall);                      /* wall down */
         }
     }
 
-    /* Knuckle posts: short rounded nubs at the jaw tips (the rubber points /
-     * snooker knuckles). cloth-coloured, only up to the nose height. */
-    uint16_t knub = shade565(t->cloth, 0.62f);
-    for (int j = 0; j < w->njaw; j++) {
-        Vec3 c = w->jaw[j]; float r = t->jaw_r;
-        const int N = 8;
-        for (int k = 0; k < N; k++) {
-            float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
-            Vec3 p0 = v3(c.x + r * cosf(a0), 0, c.z + r * sinf(a0));
-            Vec3 p1 = v3(c.x + r * cosf(a1), 0, c.z + r * sinf(a1));
-            Vec3 q0 = v3(p0.x, nose_h, p0.z), q1 = v3(p1.x, nose_h, p1.z);
-            quad(p0, p1, q1, q0, knub);
+    /* Knuckle posts (snooker rounded knuckles read; pool points are tiny). */
+    if (s_is_snooker) {
+        uint16_t knub = shade565(t->cloth, 0.62f);
+        for (int j = 0; j < w->njaw; j++) {
+            Vec3 c = w->jaw[j]; float r = t->jaw_r;
+            const int N = 6;
+            for (int k = 0; k < N; k++) {
+                float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
+                Vec3 p0 = v3(c.x + r * cosf(a0), 0, c.z + r * sinf(a0));
+                Vec3 p1 = v3(c.x + r * cosf(a1), 0, c.z + r * sinf(a1));
+                Vec3 q0 = v3(p0.x, nose_h, p0.z), q1 = v3(p1.x, nose_h, p1.z);
+                quad(p0, p1, q1, q0, knub);
+            }
         }
     }
 }

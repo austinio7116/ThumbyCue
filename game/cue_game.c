@@ -28,6 +28,8 @@ static int       s_kind;          /* 0 pool 1 snooker */
 
 static float s_aim;               /* aim azimuth (rad) */
 static float s_view_az;           /* camera orbit azimuth (rad) */
+static float s_aim_hold;          /* how long the aim d-pad has been held (s) */
+static int   s_aim_dir;           /* last aim direction (+1/-1/0) */
 static float s_cam_elev = 0.34f;  /* aim-cam height (m) */
 static float s_cam_dist = 0.62f;  /* aim-cam back distance (m) */
 static int   s_overhead;
@@ -89,7 +91,8 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
     int jr_a = !b->a && s_prev.a;                 /* A released this frame */
     /* RB held = fine aim (precision); otherwise normal speed. Kept slow —
      * a cue stroke is a small angular adjustment. */
-    float aim_rate = b->rb ? 0.10f : 0.55f;
+    /* Aim direction this frame (LEFT swings the aim left = +az). */
+    int adir = (b->left && !b->right) ? +1 : (b->right && !b->left) ? -1 : 0;
 
     if (s_state == GS_AIM || s_state == GS_BACKSWING) {
         if (b->b) {
@@ -99,10 +102,21 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
             if (b->up)    s_tip_vert += 1.5f * dt;
             if (b->down)  s_tip_vert -= 1.5f * dt;
             clamp_tip();
+            s_aim_hold = 0; s_aim_dir = 0;
         } else {
-            /* aim always available (LEFT swings the aim left) */
-            if (b->left)  s_aim += aim_rate * dt;
-            if (b->right) s_aim -= aim_rate * dt;
+            /* Aim with an acceleration ramp: starts slow for a fine nudge,
+             * speeds up the longer you hold for big swings. RB = constant fine. */
+            if (adir != 0 && adir == s_aim_dir) s_aim_hold += dt;
+            else s_aim_hold = (adir ? dt : 0.0f);
+            s_aim_dir = adir;
+            float rate;
+            if (b->rb) {
+                rate = 0.09f;                       /* fine: constant slow */
+            } else {
+                float tr = s_aim_hold / 0.7f; if (tr > 1.0f) tr = 1.0f;
+                rate = 0.16f + (1.30f - 0.16f) * tr * tr;   /* ease-in accel */
+            }
+            s_aim += adir * rate * dt;
             if (s_state == GS_BACKSWING) {
                 /* draw the cue back (power) / push it in */
                 if (b->down) s_power += 0.85f * dt;
