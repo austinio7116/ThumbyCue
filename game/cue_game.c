@@ -30,7 +30,9 @@ static const uint16_t k_cloth[5] = {
 };
 static const char *k_cloth_name[5] = { "GREEN","TEAL","BLUE","CLARET","SLATE" };
 
-static int s_kind;            /* 0 pool, 1 snooker */
+static int s_kind;            /* CueGameKind: 0 UK8, 1 US8, 2 US9, 3 SNK10, 4 SNK15 */
+static const char *k_mode_name[CUE_GAME_COUNT] = {
+    "UK 8-BALL", "US 8-BALL", "US 9-BALL", "SNOOKER 10", "SNOOKER 15" };
 static int s_cpu;             /* opponent: 0 = 2 player, 1 = CPU */
 static int s_cloth_idx;
 static int s_vol = 14;        /* 0..20 */
@@ -68,8 +70,8 @@ static int jp(int cur, int prev) { return cur && !prev; }
 
 /* ---- table / game setup ---------------------------------------------- */
 static void rack(void) {
-    cue_table_init(&s_table, s_kind ? CUE_GAME_SNOOKER : CUE_GAME_POOL);
-    if (!s_kind) s_table.cloth = k_cloth[s_cloth_idx];   /* pool felt choice */
+    cue_table_init(&s_table, (CueGameKind)s_kind);
+    if (!s_table.is_snooker) s_table.cloth = k_cloth[s_cloth_idx];  /* pool felt choice */
     cue_table_build_world(&s_table, &s_world);
     s_n = cue_table_rack(&s_table, s_balls);
     cue_render_build_table(&s_table, &s_world);
@@ -85,10 +87,11 @@ static Vec3 cue_pos(void) {
     return s_balls[0].on ? s_balls[0].pos : cue_table_cue_home(&s_table);
 }
 
-void cue_game_set_kind(int snooker) { s_kind = snooker ? 1 : 0; new_frame(); s_screen = SC_GAME; }
+void cue_game_set_kind(int snooker) { s_kind = snooker ? CUE_GAME_SNK15 : CUE_GAME_UK8; new_frame(); s_screen = SC_GAME; }
+void cue_game_set_mode(int mode) { if (mode < 0) mode = 0; if (mode >= CUE_GAME_COUNT) mode = CUE_GAME_COUNT-1; s_kind = mode; new_frame(); s_screen = SC_GAME; }
 void cue_game_init(uint32_t seed) {
     cue_audio_init();
-    (void)seed; s_kind = 0; s_cpu = 1; s_screen = SC_TITLE;
+    (void)seed; s_kind = CUE_GAME_UK8; s_cpu = 1; s_screen = SC_TITLE;
     rack();   /* something to show behind the title */
 }
 void cue_game_set_frame_ms(float ms) { s_frame_ms = ms; }
@@ -297,7 +300,8 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
     case SC_PLAY: {
         /* items: GAME, OPPONENT, START, (back via B) */
         menu_move(b, 3);
-        if (s_cursor == 0 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right))) s_kind ^= 1;
+        if (s_cursor == 0 && jp(b->right,s_prev.right)) s_kind = (s_kind + 1) % CUE_GAME_COUNT;
+        if (s_cursor == 0 && jp(b->left, s_prev.left))  s_kind = (s_kind + CUE_GAME_COUNT - 1) % CUE_GAME_COUNT;
         if (s_cursor == 1 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right))) s_cpu ^= 1;
         if (s_cursor == 2 && jp(b->a, s_prev.a)) { new_frame(); s_screen = SC_GAME; }
         if (jp(b->b, s_prev.b)) { s_screen = SC_MAIN; s_cursor = 0; }
@@ -343,7 +347,7 @@ void cue_game_debug_cam(float ex,float ey,float ez,float tx,float ty,float tz,fl
     s_dbg=1; s_dbg_eye=v3(ex,ey,ez); s_dbg_tgt=v3(tx,ty,tz); s_dbg_fov=fov;
 }
 void cue_game_debug_spread(void) {
-    s_kind = 1; rack(); memset(s_balls,0,sizeof s_balls);
+    s_kind = CUE_GAME_SNK15; rack(); memset(s_balls,0,sizeof s_balls);
     float R=s_table.R;
     const int ids[8]={CUE_ID_CUE,1,CUE_ID_YELLOW,CUE_ID_GREEN,CUE_ID_BROWN,CUE_ID_BLUE,CUE_ID_PINK,CUE_ID_BLACK};
     int n=0; for(int i=0;i<8;i++){int row=i/4,col=i%4; CueBall*bb=&s_balls[n++];
@@ -455,7 +459,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
     case SC_PLAY: {
         dim(fb, 8);
         center(fb, "PLAY", 14, RGB565C(255,240,200));
-        snprintf(buf,sizeof buf,"GAME   < %s >", s_kind?"SNOOKER":"8-BALL");
+        snprintf(buf,sizeof buf,"GAME  < %s >", k_mode_name[s_kind]);
         const char *it[3]; it[0]=buf;
         char obuf[24]; snprintf(obuf,sizeof obuf,"VS     < %s >", s_cpu?"CPU":"PLAYER 2");
         it[1]=obuf; it[2]="START";
@@ -490,7 +494,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
         center(fb, "FRAME OVER", 34, RGB565C(255,240,200));
         snprintf(buf,sizeof buf,"%s WINS", s_rules.winner==0?"PLAYER 1":(s_cpu?"CPU":"PLAYER 2"));
         center(fb, buf, 54, RGB565C(255,230,120));
-        if (s_kind) {
+        if (s_table.is_snooker) {
             snprintf(buf,sizeof buf,"%d - %d", s_rules.score[0], s_rules.score[1]);
             center(fb, buf, 68, RGB565C(200,220,255));
         }
@@ -500,7 +504,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
         /* in-game HUD */
         cue_rules_status(&s_rules, buf, sizeof buf);
         craft_font_draw(fb, buf, 3, 3, RGB565C(230,230,210));
-        if (s_kind) {
+        if (s_table.is_snooker) {
             char sb[24]; snprintf(sb,sizeof sb,"%d-%d", s_rules.score[0], s_rules.score[1]);
             craft_font_draw(fb, sb, 3, 11, RGB565C(200,220,255));
         }

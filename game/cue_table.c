@@ -19,62 +19,68 @@
 void cue_table_init(CueTable *t, CueGameKind kind) {
     memset(t, 0, sizeof(*t));
     t->kind = kind;
-    if (kind == CUE_GAME_POOL) {
-        /* 7 ft US pool: 1.98 × 0.99 m, 2.25" balls. Pocket geometry follows
-         * the 2D game's ratios (pocket≈2.17R, knuckle gap≈2.67R, 45°/70°). */
+    t->is_snooker = (kind == CUE_GAME_SNK10 || kind == CUE_GAME_SNK15);
+
+    if (kind == CUE_GAME_UK8) {
+        /* 7 ft UK pub 8-ball: 1.98 × 0.99 m, tight ROUNDED (curved) pockets. */
         t->half_len = 1.98f * 0.5f;
         t->half_wid = 0.99f * 0.5f;
-        t->R = 0.028575f;
-        t->mass = 0.170f;
-        t->cushion_h = 1.27f * t->R;
-        t->rail_w = 0.075f;
-        /* UK-style 8-ball: rounded (curved) pocket jaws, a touch more open than
-         * snooker. (US straight-mitre pockets would set pocket_round = 0.) */
+        t->R = 0.028575f; t->mass = 0.170f;
+        t->cushion_h = 1.27f * t->R; t->rail_w = 0.075f;
         t->pocket_round = 1;
-        t->pr_corner  = 2.15f * t->R;
-        t->pr_side    = 1.95f * t->R;
-        t->gap_corner = 2.667f * t->R;
-        t->gap_side   = 2.50f  * t->R;
+        t->pr_corner  = 2.15f * t->R; t->pr_side  = 1.95f * t->R;
+        t->gap_corner = 2.667f * t->R; t->gap_side = 2.50f * t->R;
         t->facing_len = 1.667f * t->R;
-        t->ang_corner = 45.0f;
-        t->ang_side   = 70.0f;
-        t->off_corner = 0.42f * t->R;
-        t->off_side   = 1.25f * t->R;
-        t->jaw_r      = 0.004f;
+        t->ang_corner = 45.0f; t->ang_side = 70.0f;
+        t->off_corner = 0.42f * t->R; t->off_side = 1.25f * t->R;
+        t->jaw_r = 0.004f;
         t->cloth = RGB565C(22, 120, 70);
-        t->rail = RGB565C(96, 54, 26);
-        t->rail_top = RGB565C(128, 78, 38);
+        t->rail = RGB565C(96, 54, 26); t->rail_top = RGB565C(128, 78, 38);
+        t->spot = RGB565C(180, 180, 180); t->nballs = 16;
+    } else if (kind == CUE_GAME_US8 || kind == CUE_GAME_US9) {
+        /* 9 ft US table: 2.54 × 1.27 m, 2.25" balls, ANGLED straight-mitre
+         * pockets (sharp points, more open than UK). */
+        t->half_len = 2.54f * 0.5f;
+        t->half_wid = 1.27f * 0.5f;
+        t->R = 0.028575f; t->mass = 0.170f;
+        t->cushion_h = 1.27f * t->R; t->rail_w = 0.080f;
+        t->pocket_round = 0;                 /* straight mitred facings */
+        t->pr_corner  = 2.25f * t->R; t->pr_side  = 2.10f * t->R;
+        t->gap_corner = 2.40f * t->R; t->gap_side = 2.55f * t->R;
+        t->facing_len = 1.55f * t->R;
+        t->ang_corner = 45.0f; t->ang_side = 70.0f;
+        t->off_corner = 0.42f * t->R; t->off_side = 1.20f * t->R;
+        t->jaw_r = 0.004f;
+        t->cloth = RGB565C(18, 110, 120);    /* US tables often tournament blue-green */
+        t->rail = RGB565C(70, 46, 30); t->rail_top = RGB565C(100, 66, 42);
         t->spot = RGB565C(180, 180, 180);
-        t->nballs = 16;
+        t->nballs = (kind == CUE_GAME_US9) ? 10 : 16;
     } else {
-        /* 12 ft snooker: tighter, rounder pockets (steeper facings). */
-        t->half_len = 3.569f * 0.5f;
-        t->half_wid = 1.778f * 0.5f;
-        t->R = 0.0262500f;
-        t->mass = 0.142f;
-        t->cushion_h = 1.27f * t->R;
-        t->rail_w = 0.085f;
+        /* Snooker — SNK10 (10 ft, 10 reds) or SNK15 (12 ft, 15 reds). Curved
+         * jaws. Layout offsets scale with table length off the 12 ft master. */
+        t->reds = (kind == CUE_GAME_SNK10) ? 10 : 15;
+        float master = 3.569f * 0.5f;        /* 12 ft half-length */
+        if (kind == CUE_GAME_SNK10) { t->half_len = 2.972f * 0.5f; t->half_wid = 1.483f * 0.5f; }
+        else                        { t->half_len = 3.569f * 0.5f; t->half_wid = 1.778f * 0.5f; }
+        float sc = t->half_len / master;     /* layout scale */
+        t->R = 0.0262500f; t->mass = 0.142f;
+        t->cushion_h = 1.27f * t->R; t->rail_w = 0.085f;
         t->pocket_round = 1;
-        t->pr_corner  = 1.98f * t->R;   /* loosened slightly */
-        t->pr_side    = 1.82f * t->R;
-        t->gap_corner = 2.45f * t->R;
-        t->gap_side   = 2.18f * t->R;
+        t->pr_corner  = 1.98f * t->R; t->pr_side  = 1.82f * t->R;
+        t->gap_corner = 2.45f * t->R; t->gap_side = 2.18f * t->R;
         t->facing_len = 1.25f * t->R;
-        t->ang_corner = 60.0f;          /* steeper = rounder mouth */
-        t->ang_side   = 80.0f;
-        t->off_corner = 0.30f * t->R;
-        t->off_side   = 1.00f * t->R;
-        t->jaw_r      = 0.012f;
-        t->baulk_x = -t->half_len + 0.737f;
-        t->d_radius = 0.292f;
+        t->ang_corner = 60.0f; t->ang_side = 80.0f;
+        t->off_corner = 0.30f * t->R; t->off_side = 1.00f * t->R;
+        t->jaw_r = 0.012f;
+        t->baulk_x = -t->half_len + 0.737f * sc;
+        t->d_radius = 0.292f * sc;
         t->blue_x = 0.0f;
         t->pink_x = t->half_len * 0.5f;
-        t->black_x = t->half_len - 0.324f;
+        t->black_x = t->half_len - 0.324f * sc;
         t->cloth = RGB565C(20, 100, 78);
-        t->rail = RGB565C(74, 44, 22);
-        t->rail_top = RGB565C(104, 62, 30);
+        t->rail = RGB565C(74, 44, 22); t->rail_top = RGB565C(104, 62, 30);
         t->spot = RGB565C(200, 200, 200);
-        t->nballs = 22;
+        t->nballs = (t->reds == 10) ? 17 : 22;
     }
 }
 
@@ -212,7 +218,7 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
 }
 
 Vec3 cue_table_cue_home(const CueTable *t) {
-    if (t->kind == CUE_GAME_POOL)
+    if (!t->is_snooker)
         return v3(-t->half_len * 0.5f, t->R, 0.0f);
     return v3(t->baulk_x, t->R, -t->d_radius * 0.4f);
 }
@@ -248,6 +254,24 @@ static int rack_pool(const CueTable *t, CueBall *b) {
     return n;
 }
 
+/* US 9-ball: diamond rack — 1 at the apex (foot spot), 9 in the centre. */
+static int rack_9ball(const CueTable *t, CueBall *b) {
+    const float R = t->R;
+    float footx = t->half_len * 0.5f;
+    float dx = R * 1.7320508f;
+    set_ball(&b[1], 1, footx,          0.0f,  R);
+    set_ball(&b[2], 2, footx + dx,    -R,     R);
+    set_ball(&b[3], 3, footx + dx,    +R,     R);
+    set_ball(&b[4], 4, footx + 2*dx,  -2*R,   R);
+    set_ball(&b[5], 9, footx + 2*dx,   0.0f,  R);   /* 9 in the middle */
+    set_ball(&b[6], 5, footx + 2*dx,  +2*R,   R);
+    set_ball(&b[7], 6, footx + 3*dx,  -R,     R);
+    set_ball(&b[8], 7, footx + 3*dx,  +R,     R);
+    set_ball(&b[9], 8, footx + 4*dx,   0.0f,  R);
+    set_ball(&b[0], CUE_ID_CUE, -t->half_len * 0.5f, 0.0f, R);
+    return 10;
+}
+
 static int rack_snooker(const CueTable *t, CueBall *b) {
     const float R = t->R;
     int n = 0;
@@ -258,10 +282,12 @@ static int rack_snooker(const CueTable *t, CueBall *b) {
     set_ball(&b[n++], CUE_ID_BLUE,   t->blue_x, 0.0f, R);
     set_ball(&b[n++], CUE_ID_PINK,   t->pink_x, 0.0f, R);
     set_ball(&b[n++], CUE_ID_BLACK,  t->black_x, 0.0f, R);
+    /* reds triangle: 4 rows (10 reds) or 5 rows (15), apex just behind pink. */
+    int rows = (t->reds <= 10) ? 4 : 5;
     float apexx = t->pink_x + 2.0f * R + 0.002f;
     float dx = R * 1.7320508f;
     int red_id = 1;
-    for (int row = 0; row < 5; row++) {
+    for (int row = 0; row < rows; row++) {
         float x = apexx + row * dx;
         for (int k = 0; k <= row; k++) {
             float z = (-(row) * R) + k * 2.0f * R;
@@ -273,6 +299,7 @@ static int rack_snooker(const CueTable *t, CueBall *b) {
 
 int cue_table_rack(const CueTable *t, CueBall *balls) {
     memset(balls, 0, sizeof(CueBall) * CUE_MAX_BALLS);
-    return (t->kind == CUE_GAME_POOL) ? rack_pool(t, balls)
-                                      : rack_snooker(t, balls);
+    if (t->is_snooker)            return rack_snooker(t, balls);
+    if (t->kind == CUE_GAME_US9)  return rack_9ball(t, balls);
+    return rack_pool(t, balls);   /* UK8 + US8 */
 }

@@ -53,7 +53,8 @@ int main(int argc, char **argv) {
     }
 
     cue_game_init(0x1234u);
-    if (!getenv("CUE_MENU")) cue_game_set_kind(snooker);   /* CUE_MENU: stay on title */
+    if (getenv("CUE_MODE"))      cue_game_set_mode(atoi(getenv("CUE_MODE")));
+    else if (!getenv("CUE_MENU")) cue_game_set_kind(snooker);   /* CUE_MENU: stay on title */
 
     const char *shot = getenv("CUE_SHOT");
     if (shot) {

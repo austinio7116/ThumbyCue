@@ -151,7 +151,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     s_ntab = 0;
     s_cloth = t->cloth;
     s_ballR = t->R;
-    s_is_snooker = (t->kind == CUE_GAME_SNOOKER);
+    s_is_snooker = t->is_snooker;
     s_cloth_shadow = shade565(t->cloth, 0.42f);   /* cloth bounce tint */
     s_bg_top = RGB565C(24, 26, 36);
     s_bg_bot = RGB565C(6, 7, 12);

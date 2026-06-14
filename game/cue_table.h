@@ -13,7 +13,17 @@
 
 #include "cue_physics.h"
 
-typedef enum { CUE_GAME_POOL = 0, CUE_GAME_SNOOKER = 1 } CueGameKind;
+typedef enum {
+    CUE_GAME_UK8 = 0,   /* 7ft,  curved pockets, UK 8-ball */
+    CUE_GAME_US8,       /* 9ft,  angled (straight-mitre) pockets, US 8-ball */
+    CUE_GAME_US9,       /* 9ft,  angled pockets, US 9-ball */
+    CUE_GAME_SNK10,     /* 10ft, curved pockets, 10-red snooker */
+    CUE_GAME_SNK15,     /* 12ft, curved pockets, full snooker */
+    CUE_GAME_COUNT
+} CueGameKind;
+/* legacy coarse aliases (kept so existing call sites read cleanly) */
+#define CUE_GAME_POOL    CUE_GAME_UK8
+#define CUE_GAME_SNOOKER CUE_GAME_SNK15
 
 /* Ball id conventions (shared by physics, render, rules).
  * Pool:    0 = cue, 1..7 solids, 8 = black, 9..15 stripes.
@@ -26,6 +36,8 @@ enum {
 
 typedef struct {
     CueGameKind kind;
+    int   is_snooker;           /* snooker ball set / rules vs pool */
+    int   reds;                 /* snooker: number of reds (10 or 15) */
     float half_len, half_wid;   /* to cushion nose (m) */
     float R, mass;
     float cushion_h;            /* nose height above cloth (m) */

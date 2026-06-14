@@ -37,7 +37,7 @@ static int colour_id_for_value(int v) {
 
 void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
     memset(r, 0, sizeof(*r));
-    r->kind = (t->kind == CUE_GAME_SNOOKER) ? 1 : 0;
+    r->kind = t->is_snooker;
     r->cpu = cpu;
     r->turn = 0; r->winner = -1; r->open = 1; r->break_shot = 1;
     r->shots_remaining = 1; r->two_shot = 0; r->free_shot = 0;
