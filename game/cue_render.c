@@ -21,7 +21,7 @@ static uint16_t s_cloth, s_bg_top, s_bg_bot;
 static uint16_t s_cloth_shadow;  /* dark cloth tint for ball shadow-side bounce */
 static float    s_ballR = 0.0286f;
 static int      s_is_snooker;   /* ids 1..15 mean reds, not solids/stripes */
-static int      s_lip_mode = 3;  /* 0=none 1=tight 2=wide 3=deep (CUE_LIP env) */
+static int      s_lip_mode = 1;  /* 0=none 1=tight 2=wide 3=deep (CUE_LIP env) */
 
 /* ---- per-frame projected lists ---------------------------------------- */
 typedef struct { float x0,y0,x1,y1,x2,y2; uint16_t d0,d1,d2; uint16_t color; } STri;
@@ -177,7 +177,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             float ml = sqrtf(m.x * m.x + m.z * m.z);
             Vec3 din = (ml > 1e-5f) ? v3(-m.x / ml, 0, -m.z / ml) : v3(0, 0, 0);
             float chord = sqrtf((b.x-a.x)*(b.x-a.x) + (b.z-a.z)*(b.z-a.z));
-            float blg = chord * 0.32f;                 /* arc depth toward table */
+            int straight = !t->pocket_round;           /* US mitred pockets */
+            float blg = straight ? 0.0f : chord * 0.32f;  /* straight chord vs curved arc */
             Vec3 c = v3(m.x + din.x * blg * 2.0f, 0, m.z + din.z * blg * 2.0f);
             const int N = 6;
             Vec3 arc[N + 1]; arc[0] = a;
@@ -213,7 +214,12 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                     uint16_t col = shade565(t->cloth, 1.0f - 0.5f*(1.0f - cosf(phi)));
                     Vec3 ring1[N + 1];
                     for (int k = 0; k <= N; k++) {
-                        float dx = pc.x - arc[k].x, dz = pc.z - arc[k].z;
+                        /* curved pockets roll toward the round pocket centre;
+                         * mitred (US) pockets roll straight back (uniform
+                         * outward) so the lip stays a straight chamfer. */
+                        float dx, dz;
+                        if (straight) { dx = -din.x; dz = -din.z; }
+                        else { dx = pc.x - arc[k].x; dz = pc.z - arc[k].z; }
                         float l = sqrtf(dx*dx + dz*dz) + 1e-6f;
                         ring1[k] = v3(arc[k].x + dx/l*off, yy, arc[k].z + dz/l*off);
                     }
