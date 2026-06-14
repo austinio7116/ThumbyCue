@@ -1,0 +1,96 @@
+/*
+ * ThumbyCue — billiard physics.
+ *
+ * SI units everywhere (metres, kilograms, seconds). Table plane = world
+ * X–Z, Y up; cloth at Y = 0, ball centre at Y = R (v1 is planar — no jumps,
+ * vel.y and pos.y are pinned). Each ball carries full 3-D angular velocity
+ * `w` so spin physics is real: the horizontal components are top/back/roll,
+ * the vertical (Y) component is side / "english".
+ *
+ * Motion is a fixed-substep integrator (≈2 kHz) that an accumulator drives
+ * from the frame dt, so behaviour is frame-rate independent. Per substep,
+ * each ball is in one of three cloth-contact regimes derived from the
+ * contact-point velocity u = vel + w × r_c  (r_c = (0,−R,0)):
+ *   sliding  — kinetic friction decelerates vel AND torques w (this is what
+ *              makes draw / follow / stun develop the correct roll);
+ *   rolling  — light rolling resistance; w slaved to the rolling constraint;
+ *   spinning — residual vertical spin decays on its own (side carries).
+ *
+ * Collisions are impulse-based with Coulomb friction and the sphere's
+ * rotational inertia, so ball–ball throw and english-off-the-cushion fall
+ * out of the same framework rather than being faked.
+ */
+#ifndef CUE_PHYSICS_H
+#define CUE_PHYSICS_H
+
+#include "vec.h"
+#include <stdint.h>
+
+#define CUE_MAX_BALLS   22   /* snooker: cue + 15 reds + 6 colours */
+#define CUE_MAX_SEG     40   /* cushion nose segments */
+#define CUE_MAX_POCKET   6
+
+typedef struct {
+    Vec3 pos;        /* world metres (y = R) */
+    Vec3 vel;        /* m/s (y = 0) */
+    Vec3 w;          /* angular velocity rad/s (world) */
+    Mat3 orient;     /* render orientation, integrated from w */
+    uint8_t on;      /* 1 = on the table, 0 = potted/off */
+    uint8_t id;      /* ball number / colour code (game-defined) */
+    uint8_t pocket;  /* if potted: which pocket index it fell in */
+    uint8_t _pad;
+} CueBall;
+
+/* A cushion nose segment in the X–Z plane with an inward unit normal
+ * (pointing into the playable area). Rails and rounded jaws are both built
+ * from these. */
+typedef struct { Vec3 a, b, n; } CueSeg;
+
+typedef struct {
+    /* Ball / cloth. */
+    float R, mass, g;
+    float mu_s;       /* sliding (ball–cloth kinetic) friction */
+    float mu_r;       /* rolling resistance */
+    float spin_decel; /* vertical-spin angular deceleration (rad/s^2) */
+    /* Ball–ball. */
+    float e_bb;       /* restitution */
+    float mu_bb;      /* friction (throw) */
+    /* Cushion. */
+    float e_cush;     /* restitution */
+    float mu_cush;    /* rail friction */
+    float cush_tilt;  /* contact-normal tilt from horizontal (rad), from nose height */
+
+    /* Geometry (filled by cue_table). */
+    CueSeg seg[CUE_MAX_SEG]; int nseg;
+    Vec3   jaw[CUE_MAX_SEG]; int njaw; float jaw_r;   /* immovable jaw-tip circles */
+    Vec3   pocket[CUE_MAX_POCKET]; float pocket_r[CUE_MAX_POCKET]; int npocket;
+
+    /* Integrator accumulator (do not touch). */
+    float _acc;
+} CueWorld;
+
+/* Sensible default constants for the given ball radius/mass. cue_table then
+ * fills the geometry arrays. */
+void cue_world_defaults(CueWorld *w, float R, float mass);
+
+/* Strike ball b: dir = unit aim direction in world X–Z (y=0); speed in m/s;
+ * tip_side / tip_vert = cue-tip contact offset as a fraction of R
+ * (+side = right english, +vert = follow/top, −vert = draw/bottom). The
+ * miscue limit (|offset| ≲ 0.5R) should be enforced by the caller. */
+void cue_phys_strike(const CueWorld *w, CueBall *b, Vec3 dir, float speed,
+                     float tip_side, float tip_vert);
+
+/* Advance the simulation by dt seconds. Returns 1 while any ball is still
+ * moving, 0 once the table has settled. `events` (optional) receives a
+ * bitwise OR of CUE_EV_* for sound/feedback this call. */
+enum {
+    CUE_EV_BALL_HIT  = 1 << 0,   /* ball–ball contact */
+    CUE_EV_CUSHION   = 1 << 1,   /* ball–cushion contact */
+    CUE_EV_POCKET    = 1 << 2,   /* a ball was potted */
+    CUE_EV_JAW       = 1 << 3,   /* ball rattled a jaw */
+};
+int cue_phys_step(CueWorld *w, CueBall *balls, int n, float dt, uint32_t *events);
+
+int cue_phys_moving(const CueWorld *w, const CueBall *balls, int n);
+
+#endif

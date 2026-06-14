@@ -1,0 +1,8 @@
+build_host/
+build_device/
+build_*/
+*.uf2
+*.o
+*.ppm
+*.dSYM/
+.DS_Store
