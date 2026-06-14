@@ -108,9 +108,15 @@ static void quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col) {
  * (back verts use per-node normals), so the diagonal must follow the geometry,
  * not the vertex labels — otherwise a jaw renders mirror-broken on one side.
  * alt=0 splits a-c; alt=1 splits b-d. */
-static void ribbon(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col, int alt) {
-    if (alt) { tri(a, b, d, col); tri(b, c, d, col); }
-    else     { tri(a, b, c, col); tri(a, c, d, col); }
+static void ribbon(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col) {
+    /* Split along the SHORTER diagonal — a pure distance test, so mirrored
+     * geometry triangulates identically (the jaw was broken on one side
+     * because a fixed-label diagonal is not mirror-invariant). */
+    if (v3_len2(v3_sub(b, d)) < v3_len2(v3_sub(a, c))) {
+        tri(a, b, d, col); tri(b, c, d, col);
+    } else {
+        tri(a, b, c, col); tri(a, c, d, col);
+    }
 }
 
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
@@ -194,9 +200,9 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         Vec3 af = v3(pa.x, flat_h, pa.z), bf = v3(pb.x, flat_h, pb.z);
         Vec3 ar = v3(pa.x - na.x*cwa, rail_h, pa.z - na.z*cwa);
         Vec3 br = v3(pb.x - nb.x*cwb, rail_h, pb.z - nb.z*cwb);
-        ribbon(ba, bb, bn, an, fdark, 0);      /* undercut face (leans to nose) */
+        ribbon(ba, bb, bn, an, fdark);      /* undercut face (leans to nose) */
         quad(an, bn, bf, af, face);            /* small flat (planar) */
-        ribbon(af, bf, br, ar, ctop, 0);       /* cloth top → rail */
+        ribbon(af, bf, br, ar, ctop);       /* cloth top → rail */
     }
 
     /* Wood rail frame: full rectangular ring (the pocket caps punch holes
