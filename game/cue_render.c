@@ -584,22 +584,25 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
                 t->x2, t->y2, t->d2, t->color, y0, y1);
     }
 
-    /* soft shadows (dark, depth-tested at cloth) */
+    /* soft contact shadows: a flattened elliptical pool under the ball that
+     * darkens the cloth most at the centre and fades smoothly to nothing at the
+     * rim (overhead diffuse lamps → soft penumbra, no hard edge). */
     for (int i = 0; i < s_nshadow; i++) {
         int rad = (int)s_shadow[i].rad;
         int cx = (int)s_shadow[i].cx, cy = (int)s_shadow[i].cy;
-        uint16_t d = s_shadow[i].d;
-        for (int py = cy - rad / 2; py <= cy + rad / 2; py++) {
+        float vh = 0.55f * rad + 0.01f;        /* vertical half (flattened) */
+        for (int py = cy - (int)vh - 1; py <= cy + (int)vh + 1; py++) {
             if (py < y0 || py >= y1 || py < 0 || py >= CUE_FB_H) continue;
-            float vv = (py - cy) / (0.55f * rad + 0.01f);
+            float vv = (py - cy) / vh;
             uint16_t *frow = fb + py * R3D_FB_W;
-            uint16_t *drow = depth + py * R3D_FB_W;
             for (int px = cx - rad; px <= cx + rad; px++) {
                 if (px < 0 || px >= CUE_FB_W) continue;
                 float uu = (px - cx) / (float)(rad + 0.01f);
-                if (uu * uu + vv * vv > 1.0f) continue;
-                if (d < drow[px]) continue;        /* behind table */
-                frow[px] = shade565(frow[px], 0.55f);
+                float rr = uu * uu + vv * vv;
+                if (rr >= 1.0f) continue;
+                /* darkest (×0.5) at centre, no change (×1) at the rim */
+                float f = 0.5f + 0.5f * rr * rr;
+                frow[px] = shade565(frow[px], f);
             }
         }
     }
