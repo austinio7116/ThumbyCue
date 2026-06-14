@@ -29,7 +29,8 @@ typedef struct { float cx, cy, rad, viewz; Mat3 orient; uint8_t id; } Sprite;
 static Sprite s_spr[CUE_MAX_BALLS]; static int s_nspr;
 /* ground-plane shadow decal: centre + two screen-space axis vectors (the
  * projection of world +X and +Z offsets), so it foreshortens with the cloth */
-static struct { float cx, cy, ux, uy, vx, vy; uint16_t d; } s_shadow[CUE_MAX_BALLS];
+static struct { float cx, cy, ux, uy, vx, vy;
+                uint16_t d, dx, dz; } s_shadow[CUE_MAX_BALLS];
 static int s_nshadow;
 
 #define MAX_DOTS 48
@@ -346,16 +347,18 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
          * (lamps are overhead → no side cast). Built as a ground-plane decal so
          * it foreshortens with the table and spreads toward the camera, staying
          * visible at the low aim-cam angle. */
-        float gcx, gcy, axx, axy, azx, azy; uint16_t shd;
+        float gcx, gcy, axx, axy, azx, azy; uint16_t shd, shdx, shdz;
         const float sr = s_ballR * 1.55f;      /* shadow radius in world metres */
         if (cue_render_project(v3(b->pos.x,      0.0f, b->pos.z),      &gcx, &gcy, &shd) &&
-            cue_render_project(v3(b->pos.x + sr, 0.0f, b->pos.z),      &axx, &axy, NULL) &&
-            cue_render_project(v3(b->pos.x,      0.0f, b->pos.z + sr), &azx, &azy, NULL)) {
+            cue_render_project(v3(b->pos.x + sr, 0.0f, b->pos.z),      &axx, &axy, &shdx) &&
+            cue_render_project(v3(b->pos.x,      0.0f, b->pos.z + sr), &azx, &azy, &shdz)) {
             if (s_nshadow < CUE_MAX_BALLS) {
                 s_shadow[s_nshadow].cx = gcx; s_shadow[s_nshadow].cy = gcy;
                 s_shadow[s_nshadow].ux = axx - gcx; s_shadow[s_nshadow].uy = axy - gcy;
                 s_shadow[s_nshadow].vx = azx - gcx; s_shadow[s_nshadow].vy = azy - gcy;
-                s_shadow[s_nshadow].d = shd; s_nshadow++;
+                s_shadow[s_nshadow].d = shd;
+                s_shadow[s_nshadow].dx = shdx; s_shadow[s_nshadow].dz = shdz;
+                s_nshadow++;
             }
         }
     }
@@ -461,7 +464,7 @@ static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
     if (id == CUE_ID_CUE) {
         float ax = fabsf(nb.x), ay = fabsf(nb.y), az = fabsf(nb.z);
         float m = ax > ay ? (ax > az ? ax : az) : (ay > az ? ay : az);
-        if (m > 0.93f) return RGB565C(210, 40, 40);   /* near a pole → dot */
+        if (m > 0.965f) return RGB565C(150, 70, 60);  /* small, muted pole dots */
         return base;
     }
     if (s_is_snooker) return base;              /* snooker balls are unmarked */
@@ -611,6 +614,13 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
         float det = ux * vy - uy * vx;
         if (det > -1e-4f && det < 1e-4f) continue;
         float inv = 1.0f / det;
+        /* depth of the decal varies linearly in (s,t) (1/z is linear across a
+         * plane in screen space): d = dc + s·(dx-dc) + t·(dz-dc). Comparing this
+         * per-pixel ground depth to the buffer lets a raised cushion/rail (much
+         * NEARER) occlude the shadow, while the coplanar cloth (equal depth)
+         * never self-culls. */
+        float dc = s_shadow[i].d;
+        float dds = (float)s_shadow[i].dx - dc, ddt = (float)s_shadow[i].dz - dc;
         int bx = (int)(fabsf(ux) + fabsf(vx)) + 1;   /* screen bounding box */
         int by = (int)(fabsf(uy) + fabsf(vy)) + 1;
         int x0 = (int)cx - bx, x1b = (int)cx + bx;
@@ -627,9 +637,12 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
                 float t = (-rx * uy + ry * ux) * inv;
                 float r2 = s * s + t * t;
                 if (r2 > 1.0f) continue;
-                /* soft penumbra: darkest (×0.5) at centre, fading to none at the
-                 * rim. No depth test — drawn after the cloth, before the balls,
-                 * so balls correctly occlude it (refl1 look). */
+                /* occlude where geometry is meaningfully nearer than the ground
+                 * decal (cushions, rails, the wood frame); +24 lets the equal-
+                 * depth cloth and its small gradient through. */
+                float dpix = dc + s * dds + t * ddt;
+                if ((float)drow[px] > dpix + 24.0f) continue;
+                /* soft penumbra: darkest (×0.5) at centre, fading to none at rim. */
                 float k = 0.5f + 0.5f * r2 * r2;
                 frow[px] = shade565(frow[px], k);
             }

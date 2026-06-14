@@ -78,13 +78,16 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
     }
 }
 
-/* inward unit normal of segment a→b (points toward table centre). */
+/* Inward unit normal of segment a→b. The cushion boundary is built as one
+ * closed loop traversed in a consistent sense (top rail +x, right rail +z, …),
+ * so the inward normal is simply the edge direction rotated +90°: (-dz, dx).
+ * (The earlier "point toward the origin" heuristic flipped corner-FACING
+ * segments the wrong way — facings splay outward past the rail line so their
+ * midpoint-to-centre direction is not the surface normal. That single flip
+ * spiked the render jaws AND gave balls a wrong cushion normal off the jaws.) */
 static Vec3 inward_n(float ax, float az, float bx, float bz) {
     float dx = bx - ax, dz = bz - az;
-    Vec3 n = v3_norm(v3(dz, 0, -dx));
-    float mx = (ax + bx) * 0.5f, mz = (az + bz) * 0.5f;
-    if (n.x * (-mx) + n.z * (-mz) < 0) n = v3_scale(n, -1.0f);
-    return n;
+    return v3_norm(v3(-dz, 0, dx));
 }
 static void add_seg(CueWorld *w, Vec3 a, Vec3 b, uint8_t kind) {
     if (w->nseg >= CUE_MAX_SEG) return;
