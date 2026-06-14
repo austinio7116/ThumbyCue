@@ -21,6 +21,7 @@ static uint16_t s_cloth, s_bg_top, s_bg_bot;
 static uint16_t s_cloth_shadow;  /* dark cloth tint for ball shadow-side bounce */
 static float    s_ballR = 0.0286f;
 static int      s_is_snooker;   /* ids 1..15 mean reds, not solids/stripes */
+static int      s_lip_mode = 3;  /* 0=none 1=tight 2=wide 3=deep (CUE_LIP env) */
 
 /* ---- per-frame projected lists ---------------------------------------- */
 typedef struct { float x0,y0,x1,y1,x2,y2; uint16_t d0,d1,d2; uint16_t color; } STri;
@@ -146,6 +147,7 @@ static void wood_band(float xa, float xb, float za, float zb,
 }
 
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
+    { extern char *getenv(const char*); const char *e = getenv("CUE_LIP"); if (e) s_lip_mode = e[0]-'0'; }
     s_ntab = 0;
     s_cloth = t->cloth;
     s_ballR = t->R;
@@ -177,14 +179,48 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             float chord = sqrtf((b.x-a.x)*(b.x-a.x) + (b.z-a.z)*(b.z-a.z));
             float blg = chord * 0.32f;                 /* arc depth toward table */
             Vec3 c = v3(m.x + din.x * blg * 2.0f, 0, m.z + din.z * blg * 2.0f);
-            const int N = 5;
-            Vec3 prev = a;
+            const int N = 6;
+            Vec3 arc[N + 1]; arc[0] = a;
             for (int k = 1; k <= N; k++) {
                 float tt = (float)k / N, o = 1.0f - tt;
                 Vec3 p = v3(o*o*a.x + 2*o*tt*c.x + tt*tt*b.x, 0,
                             o*o*a.z + 2*o*tt*c.z + tt*tt*b.z);
-                tri(v3(0, 0, 0), prev, p, t->cloth);
-                prev = p;
+                tri(v3(0, 0, 0), arc[k-1], p, t->cloth);
+                arc[k] = p;
+            }
+            /* Curved baize lip: roll the cloth down into the pocket from the
+             * MOUTH ARC (the true cloth edge), toward this mouth's pocket centre.
+             * Tangent profile (y = -d(1-cos phi)) → no hard top edge. */
+            if (s_lip_mode) {
+                int pidx = 0; float bestp = 1e9f;
+                for (int q = 0; q < w->npocket; q++) {
+                    float dx = w->pocket[q].x - m.x, dz = w->pocket[q].z - m.z;
+                    float dd = dx*dx + dz*dz;
+                    if (dd < bestp) { bestp = dd; pidx = q; }
+                }
+                Vec3 pc = w->pocket[pidx];
+                float pr = (pidx < 4) ? t->pr_corner : t->pr_side;
+                int M; float lw, ld;
+                switch (s_lip_mode) {
+                    case 2:  M = 5; lw = 0.95f*pr; ld = 0.55f*pr; break;  /* wide */
+                    case 3:  M = 6; lw = 0.80f*pr; ld = 0.80f*pr; break;  /* deep */
+                    default: M = 4; lw = 0.60f*pr; ld = 0.45f*pr; break;  /* tight */
+                }
+                Vec3 ring0[N + 1]; for (int k = 0; k <= N; k++) ring0[k] = arc[k];
+                for (int s = 1; s <= M; s++) {
+                    float phi = (float)s / M * 1.5707963f;
+                    float off = lw * sinf(phi), yy = -ld * (1.0f - cosf(phi));
+                    uint16_t col = shade565(t->cloth, 1.0f - 0.5f*(1.0f - cosf(phi)));
+                    Vec3 ring1[N + 1];
+                    for (int k = 0; k <= N; k++) {
+                        float dx = pc.x - arc[k].x, dz = pc.z - arc[k].z;
+                        float l = sqrtf(dx*dx + dz*dz) + 1e-6f;
+                        ring1[k] = v3(arc[k].x + dx/l*off, yy, arc[k].z + dz/l*off);
+                    }
+                    for (int k = 0; k < N; k++)
+                        quad(ring0[k], ring0[k+1], ring1[k+1], ring1[k], col);
+                    for (int k = 0; k <= N; k++) ring0[k] = ring1[k];
+                }
             }
         } else {
             tri(v3(0, 0, 0), a, b, t->cloth);
@@ -288,21 +324,6 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
                 tri(floor_c, m0, m1, pk_net);                /* taper into the bag */
             } else {
                 tri(floor_c, bed0, bed1, pk_floor);          /* shallow dark void */
-            }
-            if (!over_frame) {
-                /* curved baize lip: the cloth rolls smoothly (tight curve) down
-                 * over the pocket edge into the throat on the playing side. */
-                const int M = 3;
-                float pr = r, py = -0.0008f;
-                for (int s = 1; s <= M; s++) {
-                    float phi = (float)s / M * 1.5707963f;
-                    float rr = r - r * 0.34f * (1.0f - cosf(phi));
-                    float yy = -r * 0.52f * sinf(phi);
-                    uint16_t col = shade565(t->cloth, 1.0f - 0.5f * sinf(phi));
-                    quad(v3(cx+pr*c0, py, cz+pr*s0), v3(cx+pr*c1, py, cz+pr*s1),
-                         v3(cx+rr*c1, yy, cz+rr*s1), v3(cx+rr*c0, yy, cz+rr*s0), col);
-                    pr = rr; py = yy;
-                }
             }
             if (over_frame) {
                 Vec3 top0 = v3(cx + r*c0, cap_y, cz + r*s0);
