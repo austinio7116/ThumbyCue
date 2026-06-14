@@ -170,9 +170,14 @@ static void emit_pocket_lips(const CueTable *t, const CueWorld *w) {
             uint16_t col = shade565(t->cloth, 1.0f - 0.92f*(1.0f - cosf(phi)));
             Vec3 ring1[N + 1];
             for (int k = 0; k <= N; k++) {
+                /* taper the roll to nothing at the mouth ends (k=0,N) so the lip
+                 * doesn't dive in beside the cushion facings (the side streaks);
+                 * full roll only in the open centre of the mouth */
+                float taper = sinf(3.14159265f * (float)k / N);
+                float offk = off * taper, yyk = yy * taper;
                 float dx = pc.x - arc[k].x, dz = pc.z - arc[k].z;
                 float l = sqrtf(dx*dx + dz*dz) + 1e-6f;
-                ring1[k] = v3(arc[k].x + dx/l*off, yy, arc[k].z + dz/l*off);
+                ring1[k] = v3(arc[k].x + dx/l*offk, yyk, arc[k].z + dz/l*offk);
             }
             for (int k = 0; k < N; k++)
                 quad(ring0[k], ring0[k+1], ring1[k+1], ring1[k], col);
