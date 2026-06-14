@@ -122,22 +122,24 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     uint16_t ctop = shade565(t->cloth, 0.90f);
     for (int s = 0; s < w->nseg; s++) {
         const CueSeg *sg = &w->seg[s];
-        Vec3 n = sg->n;
+        /* Per-NODE back normal: average with the neighbouring segment when they
+         * share an endpoint, so adjacent cushion tops share their back vertices
+         * — a continuous strip with no V-gaps (the "holes in the top"). */
+        Vec3 na = sg->n, nb = sg->n;
+        if (s > 0) {
+            const CueSeg *pr = &w->seg[s-1];
+            if (v3_len2(v3_sub(pr->b, sg->a)) < 1e-8f) na = v3_norm(v3_add(sg->n, pr->n));
+        }
+        if (s < w->nseg - 1) {
+            const CueSeg *nx = &w->seg[s+1];
+            if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) nb = v3_norm(v3_add(sg->n, nx->n));
+        }
         Vec3 a0 = v3(sg->a.x, 0, sg->a.z), b0 = v3(sg->b.x, 0, sg->b.z);
         Vec3 an = v3(sg->a.x, nose_h, sg->a.z), bn = v3(sg->b.x, nose_h, sg->b.z);
+        Vec3 ar = v3(sg->a.x - na.x*cw, rail_h, sg->a.z - na.z*cw);
+        Vec3 br = v3(sg->b.x - nb.x*cw, rail_h, sg->b.z - nb.z*cw);
         quad(a0, b0, bn, an, face);            /* steep playing face (the jaw) */
-        if (sg->kind == 0) {
-            /* straight rail: cloth top sloping back to the rail */
-            Vec3 ar = v3(sg->a.x - n.x * cw, rail_h, sg->a.z - n.z * cw);
-            Vec3 br = v3(sg->b.x - n.x * cw, rail_h, sg->b.z - n.z * cw);
-            quad(an, bn, br, ar, ctop);
-        } else {
-            /* pocket facing: a thin FLAT cloth top only — extruding it back up
-             * to the rail makes a flap that pokes into the pocket void. */
-            Vec3 ar = v3(sg->a.x - n.x * cw * 0.5f, nose_h, sg->a.z - n.z * cw * 0.5f);
-            Vec3 br = v3(sg->b.x - n.x * cw * 0.5f, nose_h, sg->b.z - n.z * cw * 0.5f);
-            quad(an, bn, br, ar, ctop);
-        }
+        quad(an, bn, br, ar, ctop);            /* cloth top → rail (continuous) */
     }
 
     /* Wood rail frame: full rectangular ring (the pocket caps punch holes
