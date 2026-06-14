@@ -111,12 +111,12 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
             if (b->up)   s_power -= 0.9f * dt;
             if (s_power < 0) s_power = 0;
             if (s_power > 1) s_power = 1;
-            /* still allow fine aim while drawing back */
-            if (b->left)  s_aim -= 0.7f * dt;
-            if (b->right) s_aim += 0.7f * dt;
-        } else { /* GS_AIM default: aim + elevation */
-            if (b->left)  s_aim -= 1.4f * dt;
-            if (b->right) s_aim += 1.4f * dt;
+            /* still allow fine aim while drawing back (LEFT swings aim left) */
+            if (b->left)  s_aim += 0.7f * dt;
+            if (b->right) s_aim -= 0.7f * dt;
+        } else { /* GS_AIM default: aim + elevation (LEFT swings aim left) */
+            if (b->left)  s_aim += 1.4f * dt;
+            if (b->right) s_aim -= 1.4f * dt;
             if (b->up)    s_cam_elev += 0.4f * dt;
             if (b->down)  s_cam_elev -= 0.4f * dt;
             if (s_cam_elev < 0.10f) s_cam_elev = 0.10f;
