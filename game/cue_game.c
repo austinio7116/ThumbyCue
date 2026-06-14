@@ -72,7 +72,6 @@ static void clamp_tip(void) {
 static float s_menu_ms;
 
 void cue_game_tick(const CraftRawButtons *b, float dt) {
-    int jp_a  = b->a && !s_prev.a;
     int jp_lb = b->lb && !s_prev.lb;
 
     /* MENU: tap = re-rack the same game; hold (>0.5s) = switch pool/snooker. */
@@ -86,6 +85,9 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         return;
     }
     if (jp_lb) s_overhead ^= 1;
+    int jr_a = !b->a && s_prev.a;                 /* A released this frame */
+    /* RB held = fine aim (precision); otherwise normal speed. */
+    float aim_rate = b->rb ? 0.32f : 1.4f;
 
     if (s_state == GS_AIM || s_state == GS_BACKSWING) {
         if (b->b) {
@@ -95,48 +97,45 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
             if (b->up)    s_tip_vert += 1.5f * dt;
             if (b->down)  s_tip_vert -= 1.5f * dt;
             clamp_tip();
-        } else if (b->rb) {
-            /* zoom */
-            if (s_overhead) {
-                if (b->up)   s_cam_dist *= (1.0f - 0.8f * dt);
-                if (b->down) s_cam_dist *= (1.0f + 0.8f * dt);
+        } else {
+            /* aim always available (LEFT swings the aim left) */
+            if (b->left)  s_aim += aim_rate * dt;
+            if (b->right) s_aim -= aim_rate * dt;
+            if (s_state == GS_BACKSWING) {
+                /* draw the cue back (power) / push it in */
+                if (b->down) s_power += 0.85f * dt;
+                if (b->up)   s_power -= 0.85f * dt;
+                if (s_power < 0) s_power = 0;
+                if (s_power > 1) s_power = 1;
             } else {
-                if (b->up)   s_cam_dist -= 0.4f * dt;
-                if (b->down) s_cam_dist += 0.4f * dt;
-                if (s_cam_dist < 0.28f) s_cam_dist = 0.28f;
-                if (s_cam_dist > 1.3f) s_cam_dist = 1.3f;
+                /* camera elevation */
+                if (b->up)   s_cam_elev += 0.4f * dt;
+                if (b->down) s_cam_elev -= 0.4f * dt;
+                if (s_cam_elev < 0.10f) s_cam_elev = 0.10f;
+                if (s_cam_elev > 0.9f)  s_cam_elev = 0.9f;
             }
-        } else if (s_state == GS_BACKSWING) {
-            if (b->down) s_power += 0.9f * dt;
-            if (b->up)   s_power -= 0.9f * dt;
-            if (s_power < 0) s_power = 0;
-            if (s_power > 1) s_power = 1;
-            /* still allow fine aim while drawing back (LEFT swings aim left) */
-            if (b->left)  s_aim += 0.7f * dt;
-            if (b->right) s_aim -= 0.7f * dt;
-        } else { /* GS_AIM default: aim + elevation (LEFT swings aim left) */
-            if (b->left)  s_aim += 1.4f * dt;
-            if (b->right) s_aim -= 1.4f * dt;
-            if (b->up)    s_cam_elev += 0.4f * dt;
-            if (b->down)  s_cam_elev -= 0.4f * dt;
-            if (s_cam_elev < 0.10f) s_cam_elev = 0.10f;
-            if (s_cam_elev > 0.9f)  s_cam_elev = 0.9f;
         }
     }
 
     if (s_state == GS_AIM) {
-        if (jp_a) { s_state = GS_BACKSWING; s_power = 0.0f; }
+        /* hold A to begin the backswing */
+        if (b->a) { s_state = GS_BACKSWING; s_power = 0.0f; }
     } else if (s_state == GS_BACKSWING) {
-        if (b->b && jp_a) { /* in spin mode A still fires */ }
-        if (jp_a && s_power > 0.02f) {
-            Vec3 dir = v3(cosf(s_aim), 0, sinf(s_aim));
-            if (!s_balls[0].on) { s_balls[0].pos = cue_table_cue_home(&s_table); s_balls[0].on = 1; }
-            cue_phys_strike(&s_world, &s_balls[0], dir,
-                            s_power * MAX_STRIKE_SPEED, s_tip_side, s_tip_vert);
-            s_world._acc = 0.0f;
-            s_state = GS_SHOOTING;
-        } else if (jp_a) {
-            s_state = GS_AIM;   /* no power: abort */
+        /* release A to strike (power = how far the cue was drawn back) */
+        if (jr_a) {
+            if (s_power > 0.04f) {
+                Vec3 dir = v3(cosf(s_aim), 0, sinf(s_aim));
+                if (!s_balls[0].on) {
+                    s_balls[0].pos = cue_table_cue_home(&s_table);
+                    s_balls[0].on = 1;
+                }
+                cue_phys_strike(&s_world, &s_balls[0], dir,
+                                s_power * MAX_STRIKE_SPEED, s_tip_side, s_tip_vert);
+                s_world._acc = 0.0f;
+                s_state = GS_SHOOTING;
+            } else {
+                s_state = GS_AIM;     /* released with no draw: cancel */
+            }
         }
     } else { /* GS_SHOOTING */
         uint32_t ev = 0;
@@ -247,8 +246,8 @@ void cue_game_draw_overlay(uint16_t *fb) {
 
     /* state hint + frame time */
     const char *hint = (s_state == GS_SHOOTING) ? ""
-                     : (s_state == GS_BACKSWING) ? "A FIRE  B SPIN"
-                                                 : "A DRAW  LB TOP";
+                     : (s_state == GS_BACKSWING) ? "DN DRAW  RLS A FIRE"
+                                                 : "HOLD A  RB FINE";
     craft_font_draw(fb, hint, 30, 119, RGB565C(180,180,180));
     snprintf(buf, sizeof buf, "%dMS", (int)(s_frame_ms + 0.5f));
     craft_font_draw(fb, buf, 100, 3, RGB565C(150,150,160));
