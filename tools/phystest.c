@@ -220,6 +220,22 @@ int main(void) {
         check("side-pocket rail rebound is straight (no knuckle kick)", maxvx < 0.12f, buf);
     }
 
+    /* 12. Ball rolling straight down the rail past the side pocket must not get
+     * kicked ~90° off the knuckle (the recessed jaw must clear a rail-hugger). */
+    {
+        CueTable t; cue_table_init(&t, CUE_GAME_US8);
+        CueWorld w; cue_table_build_world(&t, &w);
+        CueBall b; fresh_ball(&b, 0.55f, -t.half_wid + w.R, w.R);
+        b.vel = v3(-1.2f, 0, 0);                  /* straight down the rail */
+        float maxvz = 0.0f;
+        int n = 0;
+        while (cue_phys_step(&w, &b, 1, 1.0f / 500.0f, NULL) && n++ < 900) {
+            if (b.pos.x > -0.25f && fabsf(b.vel.z) > maxvz) maxvz = fabsf(b.vel.z);
+        }
+        snprintf(buf, sizeof buf, "max |vz| near pocket=%.3f (clean glance -> ~0)", maxvz);
+        check("rail-hugger glances past side pocket (no jaw kick)", maxvz < 0.10f, buf);
+    }
+
     printf("\n%s (%d failures)\n", fails ? "TESTS FAILED" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }

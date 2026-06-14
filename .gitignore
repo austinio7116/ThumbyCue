@@ -6,3 +6,4 @@ build_*/
 *.ppm
 *.dSYM/
 .DS_Store
+clack_variants/

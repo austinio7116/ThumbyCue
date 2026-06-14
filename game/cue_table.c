@@ -117,12 +117,21 @@ static void add_pocket(CueWorld *w, float x, float z, float cap) {
 /* Straight cushion chain (US pool): facing-tip → knuckle → knuckle →
  * facing-tip. P2,P3 are pushed into w->jaw in boundary order so the renderer
  * can fan the bed off them. */
+/* Recess a jaw (rattle) circle so its PLAYABLE edge sits flush with the rail
+ * nose instead of poking past it: shift the centre outward (−nose inward normal)
+ * by its radius + a small margin. A ball hugging the rail then clears it
+ * cleanly; a ball entering the pocket mouth still rattles. */
+static void add_jaw_recessed(CueWorld *w, Vec3 k, Vec3 nin) {
+    float off = w->jaw_r + 0.15f * w->R;
+    add_jaw(w, v3(k.x - nin.x * off, 0, k.z - nin.z * off));
+}
 static void add_chain(CueWorld *w, Vec3 P1, Vec3 P2, Vec3 P3, Vec3 P4) {
     add_seg(w, P1, P2, 1);
     add_seg(w, P2, P3, 0);
     add_seg(w, P3, P4, 1);
-    add_jaw(w, P2);
-    add_jaw(w, P3);
+    Vec3 nin = inward_n(P2.x, P2.z, P3.x, P3.z);   /* nose inward normal */
+    add_jaw_recessed(w, P2, nin);
+    add_jaw_recessed(w, P3, nin);
 }
 
 /* Append nseg facing segments along a quadratic-bezier curve from s to e with
@@ -150,8 +159,9 @@ static void add_curved_chain(CueWorld *w, Vec3 tipIn, Vec3 kIn, Vec3 kMid,
     seg_curve(w, tipIn, kIn, aIn, nIn);
     add_seg(w, kIn, kMid, 0);
     seg_curve(w, kMid, tipMid, aOut, nOut);
-    add_jaw(w, kIn);
-    add_jaw(w, kMid);
+    Vec3 nin = inward_n(kIn.x, kIn.z, kMid.x, kMid.z);   /* nose inward normal */
+    add_jaw_recessed(w, kIn, nin);
+    add_jaw_recessed(w, kMid, nin);
 }
 
 void cue_table_build_world(const CueTable *t, CueWorld *w) {
