@@ -46,8 +46,11 @@ typedef struct {
 
 /* A cushion nose segment in the X–Z plane with an inward unit normal
  * (pointing into the playable area). Rails and pocket facings are both built
- * from these. kind: 0 = straight rail nose, 1 = pocket facing/jaw. */
-typedef struct { Vec3 a, b, n; uint8_t kind; } CueSeg;
+ * from these. kind: 0 = straight rail nose, 1 = pocket facing/jaw.
+ * na/nb are the smooth (vertex-averaged) normals at the a/b ends, so the
+ * collision normal can be interpolated along the segment — a continuous normal
+ * field across the whole chain (no kink at the rail↔facing junction). */
+typedef struct { Vec3 a, b, n, na, nb; uint8_t kind; } CueSeg;
 
 typedef struct {
     /* Ball / cloth. */

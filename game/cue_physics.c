@@ -237,28 +237,32 @@ static int collide_cushions(const CueWorld *w, CueBall *b, uint32_t *ev) {
      * rebound; then re-normalise. */
     float ct = cosf(w->cush_tilt), st = sinf(w->cush_tilt);
     /* Treat the whole cushion chain as a POLYLINE and collide against the single
-     * NEAREST contact point, using the contact-point→centre direction as the
-     * surface normal. On a segment interior that equals the face normal; at a
-     * shared vertex (where a curved jaw meets the straight nose, or between two
-     * curve segments) it is the radial direction, which smoothly blends the
-     * adjacent faces. So the ball rebounds off the true local surface — not one
-     * segment's flat normal — and is resolved ONCE per step (no double-bounce
-     * jitter at the joints the chain is built from). */
-    int best = -1; float best_pen = -1.0f; Vec3 best_n = {0,0,0};
+     * NEAREST contact point. The bounce normal is the smooth vertex-INTERPOLATED
+     * normal at the contact (lerp(na,nb,t)) — a continuous normal field along the
+     * chain, so the ball sees a single shared normal across the rail↔facing
+     * junction instead of bouncing off the kink. Resolved once per step. */
+    int best = -1; float best_pen = -1.0f; Vec3 best_n = {0,0,0}, best_sep = {0,0,0};
     for (int s = 0; s < w->nseg; s++) {
         const CueSeg *seg = &w->seg[s];
-        Vec3 cp = seg_closest(seg->a, seg->b, b->pos);
+        Vec3 ab = v3_sub(seg->b, seg->a); ab.y = 0.0f;
+        Vec3 ap = v3_sub(b->pos, seg->a); ap.y = 0.0f;
+        float L2 = ab.x*ab.x + ab.z*ab.z;
+        float t = (L2 > 1e-9f) ? (ap.x*ab.x + ap.z*ab.z) / L2 : 0.0f;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        Vec3 cp = v3(seg->a.x + ab.x*t, b->pos.y, seg->a.z + ab.z*t);
         Vec3 d = v3_sub(b->pos, cp); d.y = 0.0f;
-        float dist = sqrtf(d.x * d.x + d.z * d.z);
+        float dist = sqrtf(d.x*d.x + d.z*d.z);
         if (dist >= w->R || dist < 1e-6f) continue;
         Vec3 nd = v3_scale(d, 1.0f / dist);
-        if (nd.x * seg->n.x + nd.z * seg->n.z < 0.0f) continue;  /* behind face */
+        if (nd.x*seg->n.x + nd.z*seg->n.z < 0.0f) continue;       /* behind face */
+        /* smooth surface normal interpolated between the segment's vertex normals */
+        Vec3 sn = v3_norm(v3_add(v3_scale(seg->na, 1.0f - t), v3_scale(seg->nb, t)));
         float pen = w->R - dist;
-        if (pen > best_pen) { best_pen = pen; best = s; best_n = nd; }
+        if (pen > best_pen) { best_pen = pen; best = s; best_n = sn; best_sep = nd; }
     }
     if (best >= 0) {
-        b->pos = v3_add(b->pos, v3_scale(best_n, best_pen));    /* push out */
-        Vec3 N = v3_norm(v3(best_n.x * ct, st, best_n.z * ct));
+        b->pos = v3_add(b->pos, v3_scale(best_sep, best_pen));   /* push out along separation */
+        Vec3 N = v3_norm(v3(best_n.x * ct, st, best_n.z * ct));  /* bounce off smooth normal */
         if (collide_surface(w, b, N, w->e_cush, w->mu_cush)) {
             hit = 1;
             if (ev) *ev |= CUE_EV_CUSHION;

@@ -205,6 +205,25 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
                             v3(-hl,0,-hw+cgap), v3(-hl - cl*0.7f,0,-hw+cgap - cl*0.7f - e3), ca, ca, nc, nc);
     }
 
+    /* Smooth vertex normals: at each endpoint shared with a neighbouring
+     * segment, average the two face normals so the collision normal can be
+     * interpolated continuously along the chain (no kink at the rail↔facing
+     * junction). Free tips (pocket mouths) keep the segment's own normal. */
+    for (int s = 0; s < w->nseg; s++) {
+        Vec3 na = w->seg[s].n, nb = w->seg[s].n;
+        for (int o = 0; o < w->nseg; o++) {
+            if (o == s) continue;
+            if (v3_len2(v3_sub(w->seg[o].b, w->seg[s].a)) < 1e-8f ||
+                v3_len2(v3_sub(w->seg[o].a, w->seg[s].a)) < 1e-8f)
+                na = v3_add(na, w->seg[o].n);
+            if (v3_len2(v3_sub(w->seg[o].a, w->seg[s].b)) < 1e-8f ||
+                v3_len2(v3_sub(w->seg[o].b, w->seg[s].b)) < 1e-8f)
+                nb = v3_add(nb, w->seg[o].n);
+        }
+        w->seg[s].na = v3_norm(na);
+        w->seg[s].nb = v3_norm(nb);
+    }
+
     /* Pocket circles: centre offset just beyond the boundary; drop-capture
      * when the ball centre is within (radius − 0.3R), matching the 2D game. */
     const float d = 0.70710678f, oc = t->off_corner, os = t->off_side;
