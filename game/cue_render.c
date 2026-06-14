@@ -18,6 +18,7 @@ static CueTri   s_tab[MAX_TABLE_TRI];
 static int      s_ntab;
 static uint16_t s_cloth, s_bg_top, s_bg_bot;
 static float    s_ballR = 0.0286f;
+static int      s_is_snooker;   /* ids 1..15 mean reds, not solids/stripes */
 
 /* ---- per-frame projected lists ---------------------------------------- */
 typedef struct { float x0,y0,x1,y1,x2,y2; uint16_t d0,d1,d2; uint16_t color; } STri;
@@ -94,58 +95,78 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     s_ntab = 0;
     s_cloth = t->cloth;
     s_ballR = t->R;
-    s_bg_top = RGB565C(26, 28, 40);
-    s_bg_bot = RGB565C(8, 9, 16);
+    s_is_snooker = (t->kind == CUE_GAME_SNOOKER);
+    s_bg_top = RGB565C(24, 26, 36);
+    s_bg_bot = RGB565C(6, 7, 12);
     const float hl = t->half_len, hw = t->half_wid;
-    const float rw = t->rail_w, ch = t->cushion_h;
+    const float rw = t->rail_w;
+    const float cw = rw * 0.42f;        /* cushion depth (nose → cushion back) */
+    const float nose_h = t->cushion_h;  /* contact height */
+    const float rail_h = t->cushion_h * 1.75f;
+    uint16_t wood = t->rail, woodt = t->rail_top;
 
-    /* Cloth bed (slightly inset so the cushion noses sit over its edge). */
+    /* Cloth bed. */
     quad(v3(-hl, 0, -hw), v3(hl, 0, -hw), v3(hl, 0, hw), v3(-hl, 0, hw), t->cloth);
 
-    const float nose_h = ch;            /* cushion nose / contact height */
-    const float rail_h = ch * 1.7f;     /* wood rail top, above the nose */
-
-    /* Wood rail/frame: four strips at rail height. A bevelled inner edge
-     * (sloping down from the rail top to the cushion cloth) reads as 3D. */
-    uint16_t wood = t->rail, woodt = t->rail_top;
-    quad(v3(-hl-rw, rail_h, hw), v3(hl+rw, rail_h, hw), v3(hl+rw, rail_h, hw+rw), v3(-hl-rw, rail_h, hw+rw), woodt);
-    quad(v3(-hl-rw, rail_h, -hw-rw), v3(hl+rw, rail_h, -hw-rw), v3(hl+rw, rail_h, -hw), v3(-hl-rw, rail_h, -hw), woodt);
-    quad(v3(-hl-rw, rail_h, -hw), v3(-hl, rail_h, -hw), v3(-hl, rail_h, hw), v3(-hl-rw, rail_h, hw), woodt);
-    quad(v3(hl, rail_h, -hw), v3(hl+rw, rail_h, -hw), v3(hl+rw, rail_h, hw), v3(hl, rail_h, hw), woodt);
-    /* outer skirt (sides of the frame) so the table has visible thickness */
-    quad(v3(-hl-rw, rail_h, hw+rw), v3(hl+rw, rail_h, hw+rw), v3(hl+rw, 0, hw+rw), v3(-hl-rw, 0, hw+rw), wood);
-    quad(v3(hl+rw, rail_h, -hw-rw), v3(-hl-rw, rail_h, -hw-rw), v3(-hl-rw, 0, -hw-rw), v3(hl+rw, 0, -hw-rw), wood);
-    quad(v3(hl+rw, rail_h, hw+rw), v3(hl+rw, rail_h, -hw-rw), v3(hl+rw, 0, -hw-rw), v3(hl+rw, 0, hw+rw), wood);
-    quad(v3(-hl-rw, rail_h, -hw-rw), v3(-hl-rw, rail_h, hw+rw), v3(-hl-rw, 0, hw+rw), v3(-hl-rw, 0, -hw-rw), wood);
-
-    /* Cushions: a steep cloth playing face from bed up to the nose, then a
-     * cloth-topped slope back to the wood rail (the classic cushion section).
-     * Built per nose segment so they hug the pocket gaps. */
-    uint16_t face = shade565(t->cloth, 0.70f);   /* shaded cushion face */
-    uint16_t ctop = shade565(t->cloth, 0.92f);   /* cushion cloth top */
+    /* Cushions from the shared segment list: steep cloth playing face up to
+     * the nose, then a cloth top sloping back to the cushion's back edge.
+     * Because the segments already include the angled/rounded pocket facings,
+     * the jaws are modelled here automatically. */
+    uint16_t face = shade565(t->cloth, 0.66f);
+    uint16_t ctop = shade565(t->cloth, 0.90f);
     for (int s = 0; s < w->nseg; s++) {
         const CueSeg *sg = &w->seg[s];
-        Vec3 n = sg->n;                            /* inward */
+        Vec3 n = sg->n;
         Vec3 a0 = v3(sg->a.x, 0, sg->a.z), b0 = v3(sg->b.x, 0, sg->b.z);
         Vec3 an = v3(sg->a.x, nose_h, sg->a.z), bn = v3(sg->b.x, nose_h, sg->b.z);
-        quad(a0, b0, bn, an, face);                /* steep playing face */
-        Vec3 ar = v3(sg->a.x - n.x * rw, rail_h, sg->a.z - n.z * rw);
-        Vec3 br = v3(sg->b.x - n.x * rw, rail_h, sg->b.z - n.z * rw);
-        quad(an, bn, br, ar, ctop);                /* slope up to the rail */
+        quad(a0, b0, bn, an, face);
+        Vec3 ar = v3(sg->a.x - n.x * cw, rail_h, sg->a.z - n.z * cw);
+        Vec3 br = v3(sg->b.x - n.x * cw, rail_h, sg->b.z - n.z * cw);
+        quad(an, bn, br, ar, ctop);
     }
 
-    /* Pocket funnels: a recessed cone from the rail rim down to a point below
-     * the bed — a real hole, not a painted disc. */
-    uint16_t pk_rim = RGB565C(14, 16, 16), pk_low = RGB565C(4, 5, 5);
+    /* Wood rail frame: one strip behind each STRAIGHT rail segment, from the
+     * cushion back out to the table edge. Stops at the knuckles, so the
+     * pocket mouths stay open (no wood covering the pockets). */
+    for (int s = 0; s < w->nseg; s++) {
+        const CueSeg *sg = &w->seg[s];
+        if (sg->kind != 0) continue;               /* skip facings */
+        Vec3 n = sg->n;
+        Vec3 ai = v3(sg->a.x - n.x * cw, rail_h, sg->a.z - n.z * cw);
+        Vec3 bi = v3(sg->b.x - n.x * cw, rail_h, sg->b.z - n.z * cw);
+        Vec3 ao = v3(sg->a.x - n.x * rw, rail_h, sg->a.z - n.z * rw);
+        Vec3 bo = v3(sg->b.x - n.x * rw, rail_h, sg->b.z - n.z * rw);
+        quad(ai, bi, bo, ao, woodt);
+        /* outer skirt (vertical wall) for visible table thickness */
+        quad(ao, bo, v3(bo.x, 0, bo.z), v3(ao.x, 0, ao.z), wood);
+    }
+
+    /* Knuckle posts: short cylinders at every jaw point — sharp rubber points
+     * for US, fat rounded knuckles for snooker, all from the same jaw_r. */
+    uint16_t knub = shade565(t->cloth, 0.6f);
+    for (int j = 0; j < w->njaw; j++) {
+        Vec3 c = w->jaw[j]; float r = t->jaw_r;
+        const int N = 8;
+        for (int k = 0; k < N; k++) {
+            float a0 = k * (6.2831853f / N), a1 = (k + 1) * (6.2831853f / N);
+            Vec3 p0 = v3(c.x + r * cosf(a0), 0, c.z + r * sinf(a0));
+            Vec3 p1 = v3(c.x + r * cosf(a1), 0, c.z + r * sinf(a1));
+            Vec3 t0 = v3(p0.x, nose_h, p0.z), t1 = v3(p1.x, nose_h, p1.z);
+            quad(p0, p1, t1, t0, knub);
+        }
+    }
+
+    /* Pocket funnels: recessed cones, sized to the mouth, drawn last. */
+    uint16_t pk_rim = RGB565C(12, 14, 14), pk_low = RGB565C(3, 4, 4);
     for (int p = 0; p < w->npocket; p++) {
         Vec3 c = w->pocket[p];
-        float ro = w->pocket_r[p] * 1.25f;
-        Vec3 bottom = v3(c.x, -0.055f, c.z);
-        const int N = 12;
+        float ro = w->pocket_r[p] * 1.15f;
+        Vec3 bottom = v3(c.x, -0.06f, c.z);
+        const int N = 14;
         for (int k = 0; k < N; k++) {
             float t0 = k * (6.2831853f / N), t1 = (k + 1) * (6.2831853f / N);
-            Vec3 r0 = v3(c.x + ro * cosf(t0), rail_h + 0.001f, c.z + ro * sinf(t0));
-            Vec3 r1 = v3(c.x + ro * cosf(t1), rail_h + 0.001f, c.z + ro * sinf(t1));
+            Vec3 r0 = v3(c.x + ro * cosf(t0), rail_h - 0.001f, c.z + ro * sinf(t0));
+            Vec3 r1 = v3(c.x + ro * cosf(t1), rail_h - 0.001f, c.z + ro * sinf(t1));
             tri(r0, r1, bottom, (k & 1) ? pk_low : pk_rim);
         }
     }
@@ -327,6 +348,7 @@ static uint16_t ball_base(uint8_t id) {
         case CUE_ID_PINK:   return RGB565C(235, 120, 150);
         case CUE_ID_BLACK:  return RGB565C(20, 20, 22);
     }
+    if (s_is_snooker) return RGB565C(190, 30, 30);          /* reds 1..15 */
     /* pool: 1-7 solids, 8 black, 9-15 stripes (hue of id-8). */
     static const uint16_t hue[8] = {
         0, RGB565C(235,200,40), RGB565C(30,80,200), RGB565C(200,40,40),
@@ -335,7 +357,7 @@ static uint16_t ball_base(uint8_t id) {
     if (id >= 1 && id <= 7) return hue[id];
     if (id == 8) return RGB565C(20, 20, 22);
     if (id >= 9 && id <= 15) return RGB565C(235, 235, 225); /* white body */
-    return RGB565C(200, 40, 40);                            /* snooker red */
+    return RGB565C(200, 40, 40);
 }
 /* Sample the ball's surface colour for a ball-local unit normal. */
 static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
@@ -344,6 +366,7 @@ static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
         if (nb.x > 0.86f) return RGB565C(210, 40, 40);
         return base;
     }
+    if (s_is_snooker) return base;              /* snooker balls are unmarked */
     if (id >= 9 && id <= 15) {                  /* stripe band + number patch */
         if (fabsf(nb.y) < 0.45f) {
             static const uint16_t hue[8] = {

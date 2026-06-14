@@ -30,8 +30,8 @@ void cue_world_defaults(CueWorld *w, float R, float mass) {
     w->spin_decel = 5.0f * 0.022f * w->g / (2.0f * R);
     w->e_bb = 0.96f;
     w->mu_bb = 0.06f;         /* ball–ball throw friction */
-    w->e_cush = 0.85f;
-    w->mu_cush = 0.20f;
+    w->e_cush = 0.92f;     /* lively cushions */
+    w->mu_cush = 0.18f;
     /* Cushion nose ≈ 0.635 × ball diameter = 1.27 R above the cloth, so the
      * contact point sits ~0.27 R above centre; the contact normal tilts up by
      * asin(0.27). This tilt is what couples top/back spin into the rebound. */
@@ -196,6 +196,11 @@ static int collide_surface(const CueWorld *w, CueBall *b, Vec3 N,
     float Jn = -(1.0f + e) * vn * m;           /* central: inverse mass = 1/m */
     Vec3 Jn_v = v3_scale(N, Jn);
     b->vel = v3_add(b->vel, v3_scale(Jn_v, 1.0f / m));
+
+    /* Friction (and thus speed loss / english) only on a genuine impact — a
+     * ball merely rolling ALONG the rail has a near-zero approach speed and
+     * must not be braked every substep (that was the "sticking"). */
+    if (-vn < 0.025f) { b->vel.y = 0.0f; return 1; }
 
     /* Tangential friction (rail/jaw): opposes the tangential surface slip,
      * which includes side spin — this is english-off-the-cushion. */

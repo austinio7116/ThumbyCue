@@ -42,9 +42,9 @@ typedef struct {
 } CueBall;
 
 /* A cushion nose segment in the X–Z plane with an inward unit normal
- * (pointing into the playable area). Rails and rounded jaws are both built
- * from these. */
-typedef struct { Vec3 a, b, n; } CueSeg;
+ * (pointing into the playable area). Rails and pocket facings are both built
+ * from these. kind: 0 = straight rail nose, 1 = pocket facing/jaw. */
+typedef struct { Vec3 a, b, n; uint8_t kind; } CueSeg;
 
 typedef struct {
     /* Ball / cloth. */

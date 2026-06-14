@@ -30,13 +30,21 @@ typedef struct {
     float R, mass;
     float cushion_h;            /* nose height above cloth (m) */
     float rail_w;               /* rail/frame width, render only (m) */
-    /* Pocket geometry (m). */
-    float corner_gap;           /* along-rail distance corner→nose end */
-    float side_gap;             /* along-rail distance side pocket→nose end */
-    float cap_corner, cap_side; /* capture radii */
-    float pocket_out;           /* pocket-centre outward offset past the rail */
-    float jaw_r;                /* jaw-tip circle radius */
-    /* Snooker layout fractions (ignored for pool). */
+
+    /* Pocket-jaw model (the crux of play). Two families:
+     *   pocket_round = 0 → US pool: straight mitred facings, sharp points,
+     *                      corner cut 142°, side cut ~104°.
+     *   pocket_round = 1 → snooker/UK: rounded knuckles (arc), no points. */
+    int   pocket_round;
+    float mouth_corner;         /* opening between knuckle tips, corner (m) */
+    float mouth_side;           /* opening, side/middle pocket (m) */
+    float facing_len;           /* throat depth of a facing (m) */
+    float cut_corner_deg;       /* facing splay vs rail, corner */
+    float cut_side_deg;         /* facing splay vs rail, side */
+    float jaw_r;                /* knuckle radius (sharp point / rounded jaw) */
+    float cap_corner, cap_side; /* drop-capture radii in the throat */
+
+    /* Snooker layout (ignored for pool). */
     float baulk_x, d_radius, blue_x, pink_x, black_x;
     uint16_t cloth, rail, rail_top, spot;
     int nballs;
