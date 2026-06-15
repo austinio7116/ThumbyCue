@@ -187,69 +187,73 @@ static void emit_pocket_lips(const CueTable *t, const CueWorld *w) {
     }
 }
 
-/* A wood rail plank [xa,xb]×[za,zb] (top at `ytop`) with a full VERTICAL BORE
- * cut for every pocket that reaches it: the circle is removed from the plank top
- * AND the exposed cut edges get vertical wood walls down to `ybot` (the internal
- * bore face). Tessellates in x; per strip subtracts each pocket's z-interval. */
-/* fine-tessellate the x-range [a,b] of a plank, cutting all pocket holes and
- * dropping vertical bore walls at the cut edges. */
-static void plank_cut_range(float a, float b, float za, float zb, float ytop, float ybot,
-                            uint16_t top, uint16_t wall,
-                            const float *hx, const float *hz, const float *hr, int nh) {
-    const int NS = 14;
-    for (int i = 0; i < NS; i++) {
-        float sx0 = a + (b-a)*i/NS, sx1 = a + (b-a)*(i+1)/NS, mx = 0.5f*(sx0+sx1);
-        float lo[8], hi[8]; int ns = 1; lo[0] = za; hi[0] = zb;
-        for (int h = 0; h < nh; h++) {
-            float dx = mx - hx[h], r2 = hr[h]*hr[h];
-            if (dx*dx >= r2) continue;
-            float hh = sqrtf(r2 - dx*dx), clo = hz[h]-hh, chi = hz[h]+hh;
-            float nlo[8], nhi[8]; int nn = 0;
-            for (int s = 0; s < ns && nn < 7; s++) {
-                if (chi <= lo[s] || clo >= hi[s]) { nlo[nn]=lo[s]; nhi[nn]=hi[s]; nn++; continue; }
-                if (clo > lo[s]) { nlo[nn]=lo[s]; nhi[nn]=clo; nn++; }
-                if (chi < hi[s] && nn < 8) { nlo[nn]=chi; nhi[nn]=hi[s]; nn++; }
-            }
-            ns = nn; for (int s = 0; s < ns; s++) { lo[s]=nlo[s]; hi[s]=nhi[s]; }
-        }
-        for (int s = 0; s < ns; s++) {
-            if (hi[s]-lo[s] > 1e-4f)
-                quad(v3(sx0,ytop,lo[s]), v3(sx1,ytop,lo[s]), v3(sx1,ytop,hi[s]), v3(sx0,ytop,hi[s]), top);
-            if (lo[s] > za + 1e-4f)
-                quad(v3(sx0,ytop,lo[s]), v3(sx1,ytop,lo[s]), v3(sx1,ybot,lo[s]), v3(sx0,ybot,lo[s]), wall);
-            if (hi[s] < zb - 1e-4f)
-                quad(v3(sx0,ytop,hi[s]), v3(sx1,ytop,hi[s]), v3(sx1,ybot,hi[s]), v3(sx0,ybot,hi[s]), wall);
-        }
+/* Ray from (cx,cz) along (dc,ds) → its exit point on the rectangle edges. */
+static Vec3 ray_rect(float cx, float cz, float dc, float ds,
+                     float x0, float x1, float z0, float z1, float y) {
+    float t = 1e9f, tt;
+    if (dc >  1e-6f) { tt = (x1-cx)/dc; if (tt > 0 && tt < t) t = tt; }
+    if (dc < -1e-6f) { tt = (x0-cx)/dc; if (tt > 0 && tt < t) t = tt; }
+    if (ds >  1e-6f) { tt = (z1-cz)/ds; if (tt > 0 && tt < t) t = tt; }
+    if (ds < -1e-6f) { tt = (z0-cz)/ds; if (tt > 0 && tt < t) t = tt; }
+    return v3(cx + dc*t, y, cz + ds*t);
+}
+
+/* Fill the bore for one pocket: the cutaway edge is the CIRCLE sampled at N
+ * points (a smooth curve), the wood fills from that circle out to the notch box
+ * [x0,x1]×[z0,z1] (the hidden rectangular cut), and each circle facet drops a
+ * vertical wall to `ybot`. Only the facets inside the box (the wood side) draw;
+ * the mouth side is left open. */
+static void bore_fill(float cx, float cz, float r, float x0, float x1, float z0, float z1,
+                      float ytop, float ybot, uint16_t top, uint16_t wall) {
+    const int N = 16;
+    for (int k = 0; k < N; k++) {
+        float a0 = k*(6.2831853f/N), a1 = (k+1)*(6.2831853f/N);
+        float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+        float mcx = cx + r*cosf(0.5f*(a0+a1)), mcz = cz + r*sinf(0.5f*(a0+a1));
+        if (mcx < x0-1e-4f || mcx > x1+1e-4f || mcz < z0-1e-4f || mcz > z1+1e-4f) continue;
+        Vec3 rim0 = v3(cx + r*c0, ytop, cz + r*s0), rim1 = v3(cx + r*c1, ytop, cz + r*s1);
+        Vec3 o0 = ray_rect(cx, cz, c0, s0, x0, x1, z0, z1, ytop);
+        Vec3 o1 = ray_rect(cx, cz, c1, s1, x0, x1, z0, z1, ytop);
+        quad(rim0, rim1, o1, o0, top);                                  /* wood top ring */
+        quad(rim0, rim1, v3(rim1.x,ybot,rim1.z), v3(rim0.x,ybot,rim0.z), wall); /* smooth wall */
     }
 }
 
-/* A wood rail plank [xa,xb]×[za,zb] with a full VERTICAL BORE cut at each pocket
- * that reaches it. Tessellates FINELY only over each hole's x-span (big solid
- * quads fill the gaps) — so the hole stays round regardless of plank length. */
+/* A wood rail plank [xa,xb]×[za,zb] with a clean round bore at each pocket: cut a
+ * rectangular notch (the pocket's clipped bounding box) from the plank top, then
+ * fill it with bore_fill so the visible cut edge is the smooth circle curve. */
 static void wood_plank_bored(float xa, float xb, float za, float zb,
                              float ytop, float ybot, uint16_t top, uint16_t wall,
                              const float *hx, const float *hz, const float *hr, int nh) {
-    float ia[CUE_MAX_POCKET], ib[CUE_MAX_POCKET]; int ni = 0;
+    float nx0[CUE_MAX_POCKET], nx1[CUE_MAX_POCKET], nz0[CUE_MAX_POCKET], nz1[CUE_MAX_POCKET];
+    int   pid[CUE_MAX_POCKET]; int ni = 0;
     for (int h = 0; h < nh; h++) {
-        if (hz[h]+hr[h] <= za || hz[h]-hr[h] >= zb) continue;   /* hole misses this z-band */
+        if (hz[h]+hr[h] <= za || hz[h]-hr[h] >= zb) continue;
         float a = hx[h]-hr[h], b = hx[h]+hr[h];
         if (a < xa) a = xa; if (b > xb) b = xb;
         if (b <= a + 1e-5f) continue;
-        ia[ni] = a; ib[ni] = b; ni++;
+        float c = hz[h]-hr[h], d = hz[h]+hr[h];
+        if (c < za) c = za; if (d > zb) d = zb;
+        nx0[ni]=a; nx1[ni]=b; nz0[ni]=c; nz1[ni]=d; pid[ni]=h; ni++;
     }
-    for (int i = 1; i < ni; i++) {                              /* insertion-sort by start */
-        float a = ia[i], b = ib[i]; int j = i-1;
-        while (j >= 0 && ia[j] > a) { ia[j+1]=ia[j]; ib[j+1]=ib[j]; j--; }
-        ia[j+1] = a; ib[j+1] = b;
+    for (int i = 1; i < ni; i++) {                              /* sort by x-start */
+        float a=nx0[i],b=nx1[i],c=nz0[i],d=nz1[i]; int p=pid[i], j=i-1;
+        while (j>=0 && nx0[j]>a){nx0[j+1]=nx0[j];nx1[j+1]=nx1[j];nz0[j+1]=nz0[j];nz1[j+1]=nz1[j];pid[j+1]=pid[j];j--;}
+        nx0[j+1]=a;nx1[j+1]=b;nz0[j+1]=c;nz1[j+1]=d;pid[j+1]=p;
     }
     float x = xa;
     for (int i = 0; i < ni; i++) {
-        float a = ia[i] < x ? x : ia[i], b = ib[i];
+        float a = nx0[i] < x ? x : nx0[i], b = nx1[i];
         if (b <= a) continue;
-        if (a > x + 1e-5f)                                      /* solid wood in the gap */
+        if (a > x + 1e-5f)
             quad(v3(x,ytop,za), v3(a,ytop,za), v3(a,ytop,zb), v3(x,ytop,zb), top);
-        plank_cut_range(a, b, za, zb, ytop, ybot, top, wall, hx, hz, hr, nh);
-        if (ib[i] > x) x = ib[i];
+        if (nz0[i] > za + 1e-4f)                                /* wood below the notch */
+            quad(v3(a,ytop,za), v3(b,ytop,za), v3(b,ytop,nz0[i]), v3(a,ytop,nz0[i]), top);
+        if (nz1[i] < zb - 1e-4f)                                /* wood above the notch */
+            quad(v3(a,ytop,nz1[i]), v3(b,ytop,nz1[i]), v3(b,ytop,zb), v3(a,ytop,zb), top);
+        int h = pid[i];
+        bore_fill(hx[h], hz[h], hr[h], a, b, nz0[i], nz1[i], ytop, ybot, top, wall);
+        if (nx1[i] > x) x = nx1[i];
     }
     if (x < xb - 1e-5f)
         quad(v3(x,ytop,za), v3(xb,ytop,za), v3(xb,ytop,zb), v3(x,ytop,zb), top);
@@ -341,8 +345,12 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         Vec3 bb = v3(pb.x - nb.x*ubb, 0, pb.z - nb.z*ubb);
         Vec3 an = v3(pa.x, nose_h, pa.z), bn = v3(pb.x, nose_h, pb.z);
         Vec3 af = v3(pa.x, flat_h, pa.z), bf = v3(pb.x, flat_h, pb.z);
-        Vec3 ar = v3(pa.x - na.x*cwa, rail_h, pa.z - na.z*cwa);
-        Vec3 br = v3(pb.x - nb.x*cwb, rail_h, pb.z - nb.z*cwb);
+        /* straight rail nose (kind 0): uniform-depth back (own normal) so the
+         * cushion doesn't taper toward the knuckle; jaws keep the averaged normal */
+        Vec3 bka = (sg->kind == 0) ? sg->n : na;
+        Vec3 bkb = (sg->kind == 0) ? sg->n : nb;
+        Vec3 ar = v3(pa.x - bka.x*cwa, rail_h, pa.z - bka.z*cwa);
+        Vec3 br = v3(pb.x - bkb.x*cwb, rail_h, pb.z - bkb.z*cwb);
         ribbon(ba, bb, bn, an, fdark);      /* undercut face (leans to nose) */
         quad(an, bn, bf, af, face);            /* small flat (planar) */
         ribbon(af, bf, br, ar, ctop);       /* cloth top → rail */
@@ -356,7 +364,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * corner-normal pulls the cushion back to ~0.82·cw, so set the wood inset a
      * touch inside that (0.78·cw) — the wood reaches the cushion (no gap), the
      * cushion (drawn after, at rail_h) cleanly covers the tiny overlap. */
-    const float ibx = hl + 0.78f*cw, ibz = hw + 0.78f*cw;
+    const float ibx = hl + 0.88f*cw, ibz = hw + 0.88f*cw;
     const float plank_y = rail_h - 0.0010f;   /* a hair below the cushion back to avoid z-fight */
     float hx[CUE_MAX_POCKET], hz[CUE_MAX_POCKET], hr[CUE_MAX_POCKET];
     for (int p = 0; p < w->npocket; p++) {
