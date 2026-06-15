@@ -70,6 +70,7 @@ typedef struct {
     CueSeg seg[CUE_MAX_SEG]; int nseg;
     Vec3   jaw[CUE_MAX_SEG]; int njaw; float jaw_r;   /* immovable jaw-tip circles */
     Vec3   pocket[CUE_MAX_POCKET]; float pocket_r[CUE_MAX_POCKET]; int npocket;
+    float  drop_back;   /* corner drop pulled this far further INTO the pocket (m) */
 
     /* First object ball (id) the CUE ball contacts after a strike; -1 = none.
      * Reset to -1 before each shot; read at settle for rules. */

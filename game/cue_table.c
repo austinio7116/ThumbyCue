@@ -82,6 +82,7 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->spot = RGB565C(200, 200, 200);
         t->nballs = (t->reds == 10) ? 17 : 22;
     }
+    t->drop_back = 0.9f * t->R;   /* corner drops sink this far further into the pocket (tweak) */
 }
 
 /* Inward unit normal of segment a→b. The cushion boundary is built as one
@@ -168,6 +169,7 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
     cue_world_defaults(w, t->R, t->mass);
     w->cush_tilt = asinf((t->cushion_h - t->R) / t->R);
     w->jaw_r = t->jaw_r;
+    w->drop_back = t->drop_back;
 
     const float hl = t->half_len, hw = t->half_wid, R = t->R;
 
