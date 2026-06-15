@@ -285,8 +285,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     const float hl = t->half_len, hw = t->half_wid;
     const float rw = t->rail_w;
     const float cw = rw * 0.63f;        /* cushion depth (nose → cushion back); +50% for a beefier rail */
-    const float nose_h = t->cushion_h;  /* contact height */
-    const float rail_h = t->cushion_h * 1.75f;
+    const float nose_h = t->cushion_h;  /* contact height — the flat cushion top */
+    const float rail_h = nose_h;        /* wood top level WITH the flat cushion top */
     uint16_t wood = t->rail, woodt = t->rail_top;
 
     /* Cloth bed — fanned from the centre over the knuckle boundary (w->jaw is
@@ -333,7 +333,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     uint16_t fdark = shade565(t->cloth, 0.55f);   /* undercut face (in shadow) */
     uint16_t face  = shade565(t->cloth, 0.72f);   /* the nose flat */
     uint16_t ctop  = shade565(t->cloth, 0.92f);   /* cloth top to the rail */
-    const float flat_h = nose_h * 1.30f;          /* top of the small flat */
+    const float flat_h = nose_h;                  /* flat top — level, no top angle */
     const float ub = 0.45f * t->R;                /* undercut / overhang */
     for (int s = 0; s < w->nseg; s++) {
         const CueSeg *sg = &w->seg[s];
@@ -374,8 +374,13 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         Vec3 bb = v3(pb.x - nb.x*ubb, 0, pb.z - nb.z*ubb);
         Vec3 an = v3(pa.x, nose_h, pa.z), bn = v3(pb.x, nose_h, pb.z);
         Vec3 af = v3(pa.x, flat_h, pa.z), bf = v3(pb.x, flat_h, pb.z);
-        Vec3 ar = v3(pa.x - na.x*cwa, rail_h, pa.z - na.z*cwa);
-        Vec3 br = v3(pb.x - nb.x*cwb, rail_h, pb.z - nb.z*cwb);
+        /* straight rail nose (kind 0): clean perpendicular back at depth cw (a
+         * straight edge at ±(hw|hl)+cw) so the wood inner edge can touch it
+         * exactly. Curved jaws keep the averaged normal for top continuity. */
+        Vec3 bka = (sg->kind == 0) ? sg->n : na;
+        Vec3 bkb = (sg->kind == 0) ? sg->n : nb;
+        Vec3 ar = v3(pa.x - bka.x*cwa, rail_h, pa.z - bka.z*cwa);
+        Vec3 br = v3(pb.x - bkb.x*cwb, rail_h, pb.z - bkb.z*cwb);
         ribbon(ba, bb, bn, an, fdark);      /* undercut face (leans to nose) */
         quad(an, bn, bf, af, face);            /* small flat (planar) */
         ribbon(af, bf, br, ar, ctop);       /* cloth top → rail */
@@ -389,8 +394,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * corner-normal pulls the cushion back to ~0.82·cw, so set the wood inset a
      * touch inside that (0.78·cw) — the wood reaches the cushion (no gap), the
      * cushion (drawn after, at rail_h) cleanly covers the tiny overlap. */
-    const float ibx = hl + 0.88f*cw, ibz = hw + 0.88f*cw;
-    const float plank_y = rail_h - 0.0010f;   /* a hair below the cushion back to avoid z-fight */
+    const float ibx = hl + cw, ibz = hw + cw;   /* wood inner edge EXACTLY at the cushion back */
+    const float plank_y = rail_h;   /* wood top exactly level with the flat cushion top */
     float hx[CUE_MAX_POCKET], hz[CUE_MAX_POCKET], hr[CUE_MAX_POCKET];
     for (int p = 0; p < w->npocket; p++) {
         hx[p] = w->pocket[p].x; hz[p] = w->pocket[p].z;
