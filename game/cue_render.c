@@ -903,6 +903,12 @@ void cue_render_group_icon(uint16_t *fb, int cx, int cy, int rad, int group) {
     draw_ball_icon(fb, cx, cy, rad, (group == 2) ? 9 : 1, 0);
 }
 
+/* HUD: draw a specific ball id (number circle facing out) with the live set —
+ * used to show the 9-ball "ball to pot next". */
+void cue_render_ball_icon(uint16_t *fb, int cx, int cy, int rad, int id) {
+    draw_ball_icon(fb, cx, cy, rad, (uint8_t)id, 1);
+}
+
 /* 3D-shaded cue ball for the spin/aim HUD: a white sphere with a specular
  * highlight and the tip-contact marker drawn on its front face at (side,vert)
  * (fractions of R; +side = right english, +vert = top/follow). Replaces the old
@@ -943,11 +949,13 @@ void cue_render_set_preview(uint16_t *fb, int cx, int cy, int rad,
     int sb = s_ball_set, ss = s_is_snooker;
     s_ball_set = (ballset < 0 || ballset > 4) ? 0 : ballset;
     s_is_snooker = snooker;
-    uint8_t ids[3];
-    if (snooker) { ids[0] = 1; ids[1] = CUE_ID_YELLOW; ids[2] = CUE_ID_BLACK; }
-    else         { ids[0] = 1; ids[1] = 11;            ids[2] = 8; }  /* solid / stripe / 8 */
-    int gap = rad * 2 + 4;
-    for (int i = 0; i < 3; i++)
-        draw_ball_icon(fb, cx + (i - 1) * gap, cy, rad, ids[i], 1);
+    /* Show two solids (palette), a stripe (stripe style) and the 8 so sets that
+     * share a ball or two still read differently. Snooker shows its colours. */
+    uint8_t ids_pool[4] = { 1, 3, 9, 8 };
+    uint8_t ids_snk[4]  = { 1, CUE_ID_YELLOW, CUE_ID_BLUE, CUE_ID_BLACK };
+    const uint8_t *ids = snooker ? ids_snk : ids_pool;
+    int n = 4, gap = rad * 2 + 4;
+    for (int i = 0; i < n; i++)
+        draw_ball_icon(fb, cx + (int)((i - (n - 1) * 0.5f) * gap), cy, rad, ids[i], 1);
     s_ball_set = sb; s_is_snooker = ss;
 }

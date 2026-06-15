@@ -39,6 +39,20 @@ static int s_ballset;          /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna, 4 pro-tour 
 #define CUE_NBALLSET 5
 static const char *k_ballset_name[CUE_NBALLSET] = {
     "PRO", "UK Y/B", "UK Y/R", "DYNA", "PRO TOUR" };
+/* 9-ball needs every ball distinguishable, so only sets with a full per-number
+ * colour range are valid: PRO (0) and PRO TOUR (4). The 2-colour grouped sets
+ * (UK Y/B, UK Y/R, DYNA) are excluded for US9. */
+static int ballset_ok(int mode, int set) {
+    if (mode == CUE_GAME_US9) return set == 0 || set == 4;
+    return 1;
+}
+static int next_ballset(int mode, int set, int dir) {
+    for (int i = 0; i < CUE_NBALLSET; i++) {
+        set = (set + dir + CUE_NBALLSET) % CUE_NBALLSET;
+        if (ballset_ok(mode, set)) return set;
+    }
+    return set;
+}
 static int default_ballset(int mode) {
     if (mode == CUE_GAME_UK8) return 1;        /* yellow/blue solids */
     if (mode == CUE_GAME_US8) return 3;        /* dyna stripe */
@@ -90,6 +104,8 @@ static void rack(void) {
     cue_render_build_table(&s_table, &s_world);
 }
 static void new_frame(void) {
+    if (!ballset_ok(s_kind, s_ballset))      /* e.g. a grouped set isn't valid for 9-ball */
+        s_ballset = default_ballset(s_kind);
     rack();
     cue_rules_init(&s_rules, &s_table, s_cpu);
     s_state = GS_AIM;
@@ -357,7 +373,7 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         }
         if (s_cursor == 1 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right))) s_cpu ^= 1;
         if (s_cursor == 2 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right)))
-            s_ballset = (s_ballset + (jp(b->right,s_prev.right)?1:CUE_NBALLSET-1)) % CUE_NBALLSET;
+            s_ballset = next_ballset(s_kind, s_ballset, jp(b->right,s_prev.right)?1:-1);
         if (s_cursor == 3 && jp(b->a, s_prev.a)) { new_frame(); s_screen = SC_GAME; }
         if (jp(b->b, s_prev.b)) { s_screen = SC_MAIN; s_cursor = 0; }
         break; }
@@ -585,6 +601,13 @@ void cue_game_draw_overlay(uint16_t *fb) {
             cue_render_group_icon(fb, 9, 7, 5, s_rules.group[s_rules.turn]);
             if (s_rules.shots_remaining > 1)
                 craft_font_draw(fb, "2 SHOTS", 18, 4, RGB565C(230,230,210));
+        } else if (s_rules.mode == CUE_GAME_US9) {
+            /* 9-ball: show the actual ball you must hit next, not "ON n". */
+            int lo = 0;
+            for (int i = 0; i < s_n; i++)
+                if (s_balls[i].on && s_balls[i].id >= 1 && s_balls[i].id <= 9
+                    && (lo == 0 || s_balls[i].id < lo)) lo = s_balls[i].id;
+            if (lo) cue_render_ball_icon(fb, 10, 8, 7, lo);
         } else {
             cue_rules_status(&s_rules, buf, sizeof buf);
             craft_font_draw(fb, buf, 3, 3, RGB565C(230,230,210));

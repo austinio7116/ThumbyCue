@@ -11,8 +11,14 @@
  *
  * Per voice: noise × decaying excitation → 1–2 RBJ band-pass biquads. Inner
  * loop is a handful of multiply-adds — cheap enough for the device.
+ *
+ * EXCEPTION — the ball-on-ball CLACK is a real embedded SAMPLE (cue_clack_pcm.h,
+ * the 2dpool ball-hit recording, ~8 KB). The synth couldn't reproduce its body +
+ * resonant ring; a sample voice plays it back with per-hit amplitude and a tiny
+ * pitch wobble for variety.
  */
 #include "cue_audio.h"
+#include "cue_clack_pcm.h"
 #include <math.h>
 #include <string.h>
 
@@ -37,13 +43,7 @@ typedef struct {
 /* STRIKE — cue tip: bright, short, noisy click (centroid ~5.7 kHz, ~32 ms). */
 static const SfxModel M_STRIKE  = { 2, {4200, 7200}, {1.6f, 2.0f}, {1.0f, 0.7f},
     0.028f, 0.6f, 1.5f, 0.85f };
-/* CLACK — ball on ball: higher, brighter "tick" (~3.1 + 4.3 kHz, bright noise
- * tilt) — the "clack_bright" audition pick. M_CLACK2 is nudged up a touch so
- * consecutive hits aren't identical. */
-static const SfxModel M_CLACK   = { 2, {3100, 4300}, {6.0f, 5.0f}, {1.0f, 0.55f},
-    0.044f, 0.24f, 1.9f, 0.52f };
-static const SfxModel M_CLACK2  = { 2, {3300, 4550}, {6.0f, 5.0f}, {1.0f, 0.55f},
-    0.046f, 0.24f, 1.9f, 0.54f };
+/* CLACK is now a real embedded sample (cue_clack_pcm.h), not a synth model. */
 /* CUSHION — duller, lower, rubbery thud. */
 static const SfxModel M_CUSHION = { 2, {750, 1300}, {3.0f, 2.5f}, {1.0f, 0.5f},
     0.045f, 0.12f, 1.7f, 0.22f };
@@ -67,13 +67,14 @@ typedef struct {
     float lp, lpy;             /* noise brightness one-pole LP */
     float out_gain;
     uint32_t rng;
+    /* sample-playback voice (clack): if smp != NULL the synth path is skipped */
+    const int16_t *smp; int smp_len; float smp_pos, smp_rate, smp_gain;
     int on;
 } Voice;
 
 static Voice s_v[NVOICE];
 static float s_gain = 0.7f;
 static uint32_t s_rng = 0x1234567u;
-static int s_clack_alt = 0;
 
 void cue_audio_init(void) { memset(s_v, 0, sizeof s_v); }
 void cue_audio_set_volume(int vol) {
@@ -121,13 +122,28 @@ static void trigger(const SfxModel *m, float level) {
     v->out_gain = m->out_gain;
 }
 
+/* Sample-playback voice (the real clack). rate>1 = higher/faster. */
+static void trigger_sample(const int16_t *data, int len, float gain, float rate) {
+    Voice *v = alloc_voice();
+    memset(v, 0, sizeof *v);
+    v->on = 1;
+    v->smp = data; v->smp_len = len; v->smp_pos = 0.0f;
+    v->smp_rate = rate; v->smp_gain = gain;
+    v->out_gain = 1.0f;
+}
+
 void cue_audio_sfx(int which, float in) {
     if (in < 0) in = 0; if (in > 1) in = 1;
     float level = 0.35f + 0.65f * in;
     switch (which) {
     case CUE_SFX_STRIKE:  trigger(&M_STRIKE,  level); break;
-    case CUE_SFX_CLACK:
-        trigger((s_clack_alt ^= 1) ? &M_CLACK : &M_CLACK2, level); break;
+    case CUE_SFX_CLACK: {
+        /* real recorded clack; tiny per-hit pitch wobble (±2%) for variety —
+         * NOT a real speed-up (natural pitch sounded best). */
+        s_rng = s_rng * 1664525u + 1013904223u;
+        float rate = 0.98f + 0.04f * ((s_rng >> 16 & 0xFF) * (1.0f / 255.0f));
+        trigger_sample(cue_clack_pcm, CUE_CLACK_LEN, level * 1.25f, rate);
+        break; }
     case CUE_SFX_CUSHION: trigger(&M_CUSHION, level); break;
     case CUE_SFX_POT:     trigger(in > 0.5f ? &M_POT_HARD : &M_POT_SOFT, level); break;
     default:              trigger(&M_UI, 0.8f); break;
@@ -140,6 +156,16 @@ void cue_audio_render(int16_t *out, int n) {
         for (int i = 0; i < NVOICE; i++) {
             Voice *v = &s_v[i];
             if (!v->on) continue;
+            if (v->smp) {                            /* sample-playback voice */
+                int idx = (int)v->smp_pos;
+                if (idx >= v->smp_len - 1) { v->on = 0; continue; }
+                float frac = v->smp_pos - (float)idx;
+                float a = v->smp[idx]     * (1.0f / 32768.0f);
+                float b = v->smp[idx + 1] * (1.0f / 32768.0f);
+                acc += (a + (b - a) * frac) * v->smp_gain;
+                v->smp_pos += v->smp_rate;
+                continue;
+            }
             v->rng ^= v->rng << 13; v->rng ^= v->rng >> 17; v->rng ^= v->rng << 5;
             float white = ((int32_t)(v->rng & 0xFFFF) - 32768) * (1.0f/32768.0f);
             v->lpy += v->lp * (white - v->lpy);      /* spectral tilt */

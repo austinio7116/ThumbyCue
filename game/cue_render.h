@@ -47,6 +47,9 @@ void cue_render_group_icon(uint16_t *fb, int cx, int cy, int rad, int group);
 void cue_render_set_preview(uint16_t *fb, int cx, int cy, int rad,
                             int ballset, int snooker);
 
+/* Draw a single ball id (number facing out) with the live set — 9-ball next ball. */
+void cue_render_ball_icon(uint16_t *fb, int cx, int cy, int rad, int id);
+
 /* 3D-shaded cue ball for the spin HUD; marker at tip (side,vert) in R-fractions. */
 void cue_render_spin_ball(uint16_t *fb, int cx, int cy, int rad,
                           float side, float vert);
