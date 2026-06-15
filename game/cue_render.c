@@ -225,6 +225,8 @@ static void bore_fill(float cx, float cz, float r, float x0, float x1, float z0,
 static void wood_plank_bored(float xa, float xb, float za, float zb,
                              float ytop, float ybot, uint16_t top, uint16_t wall,
                              const float *hx, const float *hz, const float *hr, int nh) {
+    /* notches (clipped pocket bounding boxes) on this plank — note TWO pockets
+     * can share the same x-range (the two corners of a short rail). */
     float nx0[CUE_MAX_POCKET], nx1[CUE_MAX_POCKET], nz0[CUE_MAX_POCKET], nz1[CUE_MAX_POCKET];
     int   pid[CUE_MAX_POCKET]; int ni = 0;
     for (int h = 0; h < nh; h++) {
@@ -236,27 +238,38 @@ static void wood_plank_bored(float xa, float xb, float za, float zb,
         if (c < za) c = za; if (d > zb) d = zb;
         nx0[ni]=a; nx1[ni]=b; nz0[ni]=c; nz1[ni]=d; pid[ni]=h; ni++;
     }
-    for (int i = 1; i < ni; i++) {                              /* sort by x-start */
-        float a=nx0[i],b=nx1[i],c=nz0[i],d=nz1[i]; int p=pid[i], j=i-1;
-        while (j>=0 && nx0[j]>a){nx0[j+1]=nx0[j];nx1[j+1]=nx1[j];nz0[j+1]=nz0[j];nz1[j+1]=nz1[j];pid[j+1]=pid[j];j--;}
-        nx0[j+1]=a;nx1[j+1]=b;nz0[j+1]=c;nz1[j+1]=d;pid[j+1]=p;
+    /* wood top = plank minus the notch rectangles, split into x-columns at every
+     * notch edge (so overlapping-x notches are both subtracted). */
+    float ex[2*CUE_MAX_POCKET + 2]; int ne = 0;
+    ex[ne++] = xa; ex[ne++] = xb;
+    for (int i = 0; i < ni; i++) { ex[ne++] = nx0[i]; ex[ne++] = nx1[i]; }
+    for (int i = 1; i < ne; i++) {                              /* sort x-edges */
+        float e = ex[i]; int j = i-1;
+        while (j >= 0 && ex[j] > e) { ex[j+1] = ex[j]; j--; }
+        ex[j+1] = e;
     }
-    float x = xa;
-    for (int i = 0; i < ni; i++) {
-        float a = nx0[i] < x ? x : nx0[i], b = nx1[i];
-        if (b <= a) continue;
-        if (a > x + 1e-5f)
-            quad(v3(x,ytop,za), v3(a,ytop,za), v3(a,ytop,zb), v3(x,ytop,zb), top);
-        if (nz0[i] > za + 1e-4f)                                /* wood below the notch */
-            quad(v3(a,ytop,za), v3(b,ytop,za), v3(b,ytop,nz0[i]), v3(a,ytop,nz0[i]), top);
-        if (nz1[i] < zb - 1e-4f)                                /* wood above the notch */
-            quad(v3(a,ytop,nz1[i]), v3(b,ytop,nz1[i]), v3(b,ytop,zb), v3(a,ytop,zb), top);
-        int h = pid[i];
-        bore_fill(hx[h], hz[h], hr[h], a, b, nz0[i], nz1[i], ytop, ybot, top, wall);
-        if (nx1[i] > x) x = nx1[i];
+    for (int c = 0; c < ne-1; c++) {
+        float cx0 = ex[c], cx1 = ex[c+1];
+        if (cx1 <= cx0 + 1e-5f) continue;
+        float mx = 0.5f*(cx0+cx1);
+        float lo[8], hi[8]; int ns = 1; lo[0] = za; hi[0] = zb;
+        for (int i = 0; i < ni; i++) {                          /* subtract active notches */
+            if (mx < nx0[i]-1e-5f || mx > nx1[i]+1e-5f) continue;
+            float clo = nz0[i], chi = nz1[i];
+            float nlo[8], nhi[8]; int nn = 0;
+            for (int s = 0; s < ns && nn < 7; s++) {
+                if (chi <= lo[s] || clo >= hi[s]) { nlo[nn]=lo[s]; nhi[nn]=hi[s]; nn++; continue; }
+                if (clo > lo[s]) { nlo[nn]=lo[s]; nhi[nn]=clo; nn++; }
+                if (chi < hi[s] && nn < 8) { nlo[nn]=chi; nhi[nn]=hi[s]; nn++; }
+            }
+            ns = nn; for (int s = 0; s < ns; s++) { lo[s]=nlo[s]; hi[s]=nhi[s]; }
+        }
+        for (int s = 0; s < ns; s++)
+            if (hi[s]-lo[s] > 1e-4f)
+                quad(v3(cx0,ytop,lo[s]), v3(cx1,ytop,lo[s]), v3(cx1,ytop,hi[s]), v3(cx0,ytop,hi[s]), top);
     }
-    if (x < xb - 1e-5f)
-        quad(v3(x,ytop,za), v3(xb,ytop,za), v3(xb,ytop,zb), v3(x,ytop,zb), top);
+    for (int i = 0; i < ni; i++)                                /* bore EACH pocket */
+        bore_fill(hx[pid[i]], hz[pid[i]], hr[pid[i]], nx0[i], nx1[i], nz0[i], nz1[i], ytop, ybot, top, wall);
 }
 
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
