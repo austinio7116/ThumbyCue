@@ -334,9 +334,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     uint16_t face  = shade565(t->cloth, 0.72f);   /* the nose flat */
     uint16_t ctop  = shade565(t->cloth, 0.92f);   /* cloth top to the rail */
     const float flat_h = nose_h * 1.30f;          /* top of the small flat */
-    const float ub = 0.68f * t->R;                /* undercut / overhang — scaled with the
-                                                   * +50% cushion depth so the nose stays in
-                                                   * proportion (no long back taper) */
+    const float ub = 0.45f * t->R;                /* undercut / overhang */
     for (int s = 0; s < w->nseg; s++) {
         const CueSeg *sg = &w->seg[s];
         /* Per-NODE back normal: average with the neighbouring segment when they
@@ -352,12 +350,26 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             const CueSeg *nx = &w->seg[s+1];
             if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) { nb = v3_norm(v3_add(sg->n, nx->n)); sharedB = 1; }
         }
-        /* Keep FULL cushion depth even at a free tip (pocket mouth) — don't taper
-         * it to a point. Non-shared ends use the segment's own normal (na/nb fell
-         * back to sg->n above), so the back is a clean perpendicular offset. */
-        float uba = ub, ubb = ub;
-        float cwa = cw, cwb = cw;
-        (void)sharedA; (void)sharedB;
+        /* Mitre facing: extend the free-tip NOSE along the mitre (cyan→yellow)
+         * line only until it reaches the cushion's FULL DEPTH — the rail back
+         * plane (±(hw or hl)+cw). Direction (mitre angle) unchanged. */
+        if (sg->kind == 1 && (!sharedA || !sharedB)) {
+            int afree = !sharedA;
+            Vec3 kn = afree ? sg->b : sg->a;     /* shared knuckle (on the rail) */
+            Vec3 tp = afree ? sg->a : sg->b;     /* free tip */
+            Vec3 M = v3_norm(v3_sub(tp, kn));    /* mitre direction */
+            float t = 0.0f;
+            if (hw - fabsf(kn.z) < hl - fabsf(kn.x)) {   /* knuckle on a z-rail */
+                float target = (kn.z > 0 ? hw + cw : -(hw + cw));
+                if (fabsf(M.z) > 1e-4f) t = (target - tp.z) / M.z;
+            } else {                                     /* knuckle on an x-rail */
+                float target = (kn.x > 0 ? hl + cw : -(hl + cw));
+                if (fabsf(M.x) > 1e-4f) t = (target - tp.x) / M.x;
+            }
+            if (t > 0.0f) { Vec3 e = v3_add(tp, v3_scale(M, t)); if (afree) pa = e; else pb = e; }
+        }
+        float uba = sharedA ? ub : 0.0f, ubb = sharedB ? ub : 0.0f;
+        float cwa = sharedA ? cw : 0.0f, cwb = sharedB ? cw : 0.0f;
         Vec3 ba = v3(pa.x - na.x*uba, 0, pa.z - na.z*uba);
         Vec3 bb = v3(pb.x - nb.x*ubb, 0, pb.z - nb.z*ubb);
         Vec3 an = v3(pa.x, nose_h, pa.z), bn = v3(pb.x, nose_h, pb.z);
