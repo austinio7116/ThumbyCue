@@ -94,6 +94,29 @@ int main(void) {
           CHECK(rr.frame_over && rr.winner==0, "9ball: pot the 9 legally -> win"); }
     }
 
+    /* ---- snooker (10-red): reds tracked from the table; a foul-potted red must
+     * still reduce the count, and the last red + colour must reach the clearance
+     * (not stay stuck ON RED). ---- */
+    {
+        CueTable ts; cue_table_init(&ts, CUE_GAME_SNK10);
+        CueBall bs[CUE_MAX_BALLS]; int ns = cue_table_rack(&ts, bs);
+        CueWorld ws; cue_table_build_world(&ts, &ws);
+        CueRules rs; cue_rules_init(&rs, &ts, 0);
+        int cols[6] = { CUE_ID_YELLOW, CUE_ID_GREEN, CUE_ID_BROWN,
+                        CUE_ID_BLUE, CUE_ID_PINK, CUE_ID_BLACK };
+        #define POT(BID) do { for (int i=0;i<ns;i++) if (bs[i].id==(BID)) bs[i].on=0; \
+            int _p[1]={(BID)}; cue_rules_resolve(&rs,bs,ns,&ws,(BID),0,1,_p,1); } while (0)
+        POT(1);                 /* legal red -> ON COLOUR */
+        POT(2);                 /* red potted while ON COLOUR = foul; red 2 is gone */
+        int cnt = 0; for (int i=0;i<ns;i++) if (bs[i].on && bs[i].id>=1 && bs[i].id<=10) cnt++;
+        CHECK(rs.reds_left == cnt && rs.reds_left == 8,
+              "snooker: foul-potted red still reduces reds_left (table count)");
+        for (int rr = 3; rr <= 10; rr++) { POT(rr); POT(cols[(rr-3)%6]); }
+        CHECK(rs.target == 2,
+              "snooker: last red + colour -> clearance (not stuck ON RED)");
+        #undef POT
+    }
+
     printf(fails ? "\n%d FAIL\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;
 }

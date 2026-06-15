@@ -167,6 +167,13 @@ static int snk_on(const CueRules *r, int id) {
 static void resolve_snooker(CueRules *r, CueBall *b, int n, int first_hit,
                             int scratch, const int *potted, int np) {
     int target_before = r->target;
+    /* Reds remaining = what's actually on the table (post-shot). Tracking a
+     * counter drifted when a red was potted on a foul: it was removed from the
+     * table but never decremented, so reds_left stayed >0 and the state was
+     * stuck ON RED after the last red. Count the table instead. */
+    int reds_left = 0;
+    for (int i = 0; i < n; i++) if (b[i].on && is_red(b[i].id)) reds_left++;
+    r->reds_left = reds_left;
     int legal_pots = 0, illegal_pot = 0, maxpot = 0, reds_potted = 0;
     for (int k = 0; k < np; k++) {
         if (snk_on(r, potted[k])) legal_pots += snk_value(potted[k]);
@@ -199,7 +206,6 @@ static void resolve_snooker(CueRules *r, CueBall *b, int n, int first_hit,
     }
 
     /* legal */
-    r->reds_left -= reds_potted;
     r->score[r->turn] += legal_pots;
     r->brk += legal_pots;
 
