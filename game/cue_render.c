@@ -352,8 +352,12 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             const CueSeg *nx = &w->seg[s+1];
             if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) { nb = v3_norm(v3_add(sg->n, nx->n)); sharedB = 1; }
         }
-        float uba = sharedA ? ub : 0.0f, ubb = sharedB ? ub : 0.0f;
-        float cwa = sharedA ? cw : 0.0f, cwb = sharedB ? cw : 0.0f;
+        /* Keep FULL cushion depth even at a free tip (pocket mouth) — don't taper
+         * it to a point. Non-shared ends use the segment's own normal (na/nb fell
+         * back to sg->n above), so the back is a clean perpendicular offset. */
+        float uba = ub, ubb = ub;
+        float cwa = cw, cwb = cw;
+        (void)sharedA; (void)sharedB;
         Vec3 ba = v3(pa.x - na.x*uba, 0, pa.z - na.z*uba);
         Vec3 bb = v3(pb.x - nb.x*ubb, 0, pb.z - nb.z*ubb);
         Vec3 an = v3(pa.x, nose_h, pa.z), bn = v3(pb.x, nose_h, pb.z);
