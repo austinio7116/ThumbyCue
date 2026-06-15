@@ -12,11 +12,12 @@
 
 /* ---- static table mesh (world space) ---------------------------------- */
 typedef struct { Vec3 v[3]; Vec3 nrm; uint16_t color; } CueTri;
-#define MAX_TABLE_TRI 1500
-#define MAX_STRI      2400     /* near-clipping can split a tri into two */
+#define MAX_TABLE_TRI 2200
+#define MAX_STRI      3000     /* near-clipping can split a tri into two */
 static CueTri   s_tab[MAX_TABLE_TRI];
 static int      s_ntab;
 static int      s_bed_ntab;   /* first s_bed_ntab tris are the flat cloth bed */
+static int      s_lip_ntab;   /* s_tab[s_lip_ntab..s_ntab) are the pocket drop lips */
 static uint16_t s_cloth, s_bg_top, s_bg_bot;
 static uint16_t s_cloth_shadow;  /* dark cloth tint for ball shadow-side bounce */
 static float    s_ballR = 0.0286f;
@@ -28,6 +29,7 @@ static int      s_ball_set = 0;  /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna */
 typedef struct { float x0,y0,x1,y1,x2,y2; uint16_t d0,d1,d2; uint16_t color; } STri;
 static STri s_stri[MAX_STRI]; static int s_nstri;
 static int s_bed_nstri;   /* s_stri[0..s_bed_nstri) are the flat cloth bed */
+static int s_lip_nstri;   /* s_stri[s_lip_nstri..s_nstri) are the pocket drop lips */
 
 typedef struct { float cx, cy, rad, viewz; Mat3 orient; uint8_t id; } Sprite;
 static Sprite s_spr[CUE_MAX_BALLS]; static int s_nspr;
@@ -127,6 +129,41 @@ static void ribbon(Vec3 a, Vec3 b, Vec3 c, Vec3 d, uint16_t col) {
     }
 }
 
+/* Push a felt-boundary point OUT to the cushion back, but ONLY near the CORNER
+ * pockets (faded to zero elsewhere) — the corner pocket is set back so its felt
+ * needs to run under the cushions to frame it; the middle pockets are already
+ * right and must be left untouched. */
+static Vec3 jaw_pushed(const CueWorld *w, float pr_corner, float cw, Vec3 P) {
+    float dmin = 1e9f;
+    for (int p = 0; p < 4 && p < w->npocket; p++) {
+        float dx = P.x - w->pocket[p].x, dz = P.z - w->pocket[p].z, d = sqrtf(dx*dx + dz*dz);
+        if (d < dmin) dmin = d;
+    }
+    float thresh = 4.0f * pr_corner;
+    float f = (dmin >= thresh) ? 0.0f : (1.0f - dmin/thresh);
+    float push = cw * 1.7f * f;                 /* run the corner felt well under the frame */
+    float l = sqrtf(P.x*P.x + P.z*P.z) + 1e-6f;
+    return v3(P.x + P.x/l*push, 0, P.z + P.z/l*push);
+}
+
+/* The pocket-mouth edge as a true CIRCLE arc centred on the FUNCTIONAL drop
+ * (`pc`, which moves with the pocket setback), radius `r`, swept the short way
+ * between the two jaw tips a→b (so it faces the table). The endpoints are pinned
+ * to the jaw tips so the felt still meets the cushion noses. Both the bed cut and
+ * the lip use this, so they share one curve anchored to the drop — not the jaws. */
+static void pocket_circ_arc(Vec3 pc, float r, Vec3 a, Vec3 b, Vec3 *arc, int N) {
+    float a0 = atan2f(a.z - pc.z, a.x - pc.x);
+    float a1 = atan2f(b.z - pc.z, b.x - pc.x);
+    while (a1 - a0 >  3.14159265f) a1 -= 6.2831853f;
+    while (a1 - a0 < -3.14159265f) a1 += 6.2831853f;
+    for (int k = 0; k <= N; k++) {
+        if (k == 0)      { arc[k] = v3(a.x, 0, a.z); continue; }
+        if (k == N)      { arc[k] = v3(b.x, 0, b.z); continue; }
+        float th = a0 + (a1 - a0) * (float)k / N;
+        arc[k] = v3(pc.x + r*cosf(th), 0, pc.z + r*sinf(th));
+    }
+}
+
 /* Baize lip (the drop): rolls the cloth down into each pocket throat. Emitted
  * AFTER the pocket voids so depth-test layers it OVER the void (no rim cutting
  * across it) while the raised cushions still occlude its sides. */
@@ -135,21 +172,12 @@ static void emit_pocket_lips(const CueTable *t, const CueWorld *w) {
     int nb = w->njaw;
     for (int i = 0; i < nb; i++) {
         if (!(i & 1)) continue;                 /* only pocket-mouth edges */
-        Vec3 a = v3(w->jaw[i].x, 0, w->jaw[i].z);
-        Vec3 b = v3(w->jaw[(i + 1) % nb].x, 0, w->jaw[(i + 1) % nb].z);
+        /* same corner-only push as the bed, so the lip's outer edge meets the
+         * felt and covers the new corner baize */
+        float cw = t->rail_w * 0.63f;
+        Vec3 a = jaw_pushed(w, t->pr_corner, cw, w->jaw[i]);
+        Vec3 b = jaw_pushed(w, t->pr_corner, cw, w->jaw[(i + 1) % nb]);
         Vec3 m = v3((a.x + b.x) * 0.5f, 0, (a.z + b.z) * 0.5f);
-        float ml = sqrtf(m.x * m.x + m.z * m.z);
-        Vec3 din = (ml > 1e-5f) ? v3(-m.x / ml, 0, -m.z / ml) : v3(0, 0, 0);
-        float chord = sqrtf((b.x-a.x)*(b.x-a.x) + (b.z-a.z)*(b.z-a.z));
-        float blg = chord * 0.32f;
-        Vec3 c = v3(m.x + din.x * blg * 2.0f, 0, m.z + din.z * blg * 2.0f);
-        const int N = 6;
-        Vec3 arc[N + 1]; arc[0] = a;
-        for (int k = 1; k <= N; k++) {
-            float tt = (float)k / N, o = 1.0f - tt;
-            arc[k] = v3(o*o*a.x + 2*o*tt*c.x + tt*tt*b.x, 0,
-                        o*o*a.z + 2*o*tt*c.z + tt*tt*b.z);
-        }
         int pidx = 0; float bestp = 1e9f;
         for (int q = 0; q < w->npocket; q++) {
             float dx = w->pocket[q].x - m.x, dz = w->pocket[q].z - m.z;
@@ -158,27 +186,35 @@ static void emit_pocket_lips(const CueTable *t, const CueWorld *w) {
         }
         Vec3 pc = w->pocket[pidx];
         float pr = (pidx < 4) ? t->pr_corner : t->pr_side;
-        int M; float lw, ld;
+        float fd = w->pocket_r[pidx];            /* the FUNCTIONAL drop circle (= void) */
+        /* the bed-edge circle around the drop (matches the bed cut) — the lip
+         * rolls from here down to the drop fd */
+        const int N = 6;
+        Vec3 arc[N + 1];
+        pocket_circ_arc(pc, fd * 1.35f, a, b, arc, N);
+        int M; float ld;
         switch (s_lip_mode) {
-            case 2:  M = 5; lw = 0.95f*pr; ld = 0.55f*pr; break;
-            case 3:  M = 6; lw = 0.80f*pr; ld = 0.80f*pr; break;
-            default: M = 4; lw = 0.60f*pr; ld = 0.45f*pr; break;
+            case 2:  M = 6; ld = 0.55f*pr; break;
+            case 3:  M = 7; ld = 0.80f*pr; break;
+            default: M = 5; ld = 0.45f*pr; break;
         }
+        /* The bed already runs in close to the drop (mouth_cloth_ctrl), so the lip
+         * just rolls smoothly from that edge down to the functional drop circle —
+         * a short, multi-ring (smooth) curved roll that ends ON the red line. */
         Vec3 ring0[N + 1]; for (int k = 0; k <= N; k++) ring0[k] = arc[k];
         for (int s = 1; s <= M; s++) {
             float phi = (float)s / M * 1.5707963f;
-            float off = lw * sinf(phi), yy = -ld * (1.0f - cosf(phi));
+            float tn = sinf(phi), yy = -ld * (1.0f - cosf(phi));
             uint16_t col = shade565(t->cloth, 1.0f - 0.92f*(1.0f - cosf(phi)));
             Vec3 ring1[N + 1];
             for (int k = 0; k <= N; k++) {
-                /* taper the roll to nothing at the mouth ends (k=0,N) so the lip
-                 * doesn't dive in beside the cushion facings (the side streaks);
-                 * full roll only in the open centre of the mouth */
-                float taper = sinf(3.14159265f * (float)k / N);
-                float offk = off * taper, yyk = yy * taper;
-                float dx = pc.x - arc[k].x, dz = pc.z - arc[k].z;
-                float l = sqrtf(dx*dx + dz*dz) + 1e-6f;
-                ring1[k] = v3(arc[k].x + dx/l*offk, yyk, arc[k].z + dz/l*offk);
+                float dx = arc[k].x - pc.x, dz = arc[k].z - pc.z;
+                float Rk = sqrtf(dx*dx + dz*dz) + 1e-6f;
+                float r_full = Rk + (fd - Rk) * tn;     /* arc edge → drop */
+                float taper = sinf(3.14159265f * (float)k / N) * 2.2f;
+                if (taper > 1.0f) taper = 1.0f;
+                float r = Rk + (r_full - Rk) * taper;
+                ring1[k] = v3(pc.x + dx/Rk*r, yy*taper, pc.z + dz/Rk*r);
             }
             for (int k = 0; k < N; k++)
                 quad(ring0[k], ring0[k+1], ring1[k+1], ring1[k], col);
@@ -187,35 +223,47 @@ static void emit_pocket_lips(const CueTable *t, const CueWorld *w) {
     }
 }
 
-/* Ray from (cx,cz) along (dc,ds) → its exit point on the rectangle edges. */
-static Vec3 ray_rect(float cx, float cz, float dc, float ds,
-                     float x0, float x1, float z0, float z1, float y) {
-    float t = 1e9f, tt;
-    if (dc >  1e-6f) { tt = (x1-cx)/dc; if (tt > 0 && tt < t) t = tt; }
-    if (dc < -1e-6f) { tt = (x0-cx)/dc; if (tt > 0 && tt < t) t = tt; }
-    if (ds >  1e-6f) { tt = (z1-cz)/ds; if (tt > 0 && tt < t) t = tt; }
-    if (ds < -1e-6f) { tt = (z0-cz)/ds; if (tt > 0 && tt < t) t = tt; }
-    return v3(cx + dc*t, y, cz + ds*t);
-}
-
-/* Fill the bore for one pocket: the cutaway edge is the CIRCLE sampled at N
- * points (a smooth curve), the wood fills from that circle out to the notch box
- * [x0,x1]×[z0,z1] (the hidden rectangular cut), and each circle facet drops a
- * vertical wall to `ybot`. Only the facets inside the box (the wood side) draw;
- * the mouth side is left open. */
+/* Fill the wood ring around one pocket bore inside the notch box [x0,x1]×[z0,z1].
+ *
+ * The plank's wood lies entirely on ONE side of the pocket (the rail side); the
+ * mouth opens to the bed on the opposite side. A radial (centre-based) fill
+ * leaves slivers because the pocket centre sits OUTSIDE the box (behind the
+ * cushion). Instead we fill in fine columns ALONG the rail — each column a
+ * trapezoid whose inner edge follows the analytic circle (smooth, gap-free) and
+ * a vertical wall dropping to `ybot`.
+ *
+ *   axis    : 0 = wood spans Z (long rails, columns run along X)
+ *             1 = wood spans X (short rails, columns run along Z)
+ *   rail_hi : 1 = wood is toward the LARGER coord (mouth at the smaller box edge)
+ *             0 = wood toward the smaller coord (mouth at the larger box edge) */
 static void bore_fill(float cx, float cz, float r, float x0, float x1, float z0, float z1,
-                      float ytop, float ybot, uint16_t top, uint16_t wall) {
+                      float ytop, float ybot, uint16_t top, uint16_t wall,
+                      int axis, int rail_hi) {
     const int N = 16;
     for (int k = 0; k < N; k++) {
-        float a0 = k*(6.2831853f/N), a1 = (k+1)*(6.2831853f/N);
-        float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
-        float mcx = cx + r*cosf(0.5f*(a0+a1)), mcz = cz + r*sinf(0.5f*(a0+a1));
-        if (mcx < x0-1e-4f || mcx > x1+1e-4f || mcz < z0-1e-4f || mcz > z1+1e-4f) continue;
-        Vec3 rim0 = v3(cx + r*c0, ytop, cz + r*s0), rim1 = v3(cx + r*c1, ytop, cz + r*s1);
-        Vec3 o0 = ray_rect(cx, cz, c0, s0, x0, x1, z0, z1, ytop);
-        Vec3 o1 = ray_rect(cx, cz, c1, s1, x0, x1, z0, z1, ytop);
-        quad(rim0, rim1, o1, o0, top);                                  /* wood top ring */
-        quad(rim0, rim1, v3(rim1.x,ybot,rim1.z), v3(rim0.x,ybot,rim0.z), wall); /* smooth wall */
+        if (axis == 0) {                       /* columns along X, depth along Z */
+            float u0 = x0 + (x1-x0)*k/N, u1 = x0 + (x1-x0)*(k+1)/N;
+            float d0 = r*r-(u0-cx)*(u0-cx), d1 = r*r-(u1-cx)*(u1-cx);
+            d0 = d0 > 0 ? sqrtf(d0) : 0; d1 = d1 > 0 ? sqrtf(d1) : 0;
+            float zt0, zt1, wa, wb;            /* rim z, wood far edge */
+            if (rail_hi) { zt0 = cz+d0; zt1 = cz+d1; wa = wb = z1; }   /* wood toward +z */
+            else         { zt0 = cz-d0; zt1 = cz-d1; wa = wb = z0; }   /* wood toward -z */
+            if (zt0 < z0) zt0 = z0; if (zt0 > z1) zt0 = z1;
+            if (zt1 < z0) zt1 = z0; if (zt1 > z1) zt1 = z1;
+            quad(v3(u0,ytop,zt0), v3(u1,ytop,zt1), v3(u1,ytop,wb), v3(u0,ytop,wa), top);
+            quad(v3(u0,ytop,zt0), v3(u1,ytop,zt1), v3(u1,ybot,zt1), v3(u0,ybot,zt0), wall);
+        } else {                               /* columns along Z, depth along X */
+            float u0 = z0 + (z1-z0)*k/N, u1 = z0 + (z1-z0)*(k+1)/N;
+            float d0 = r*r-(u0-cz)*(u0-cz), d1 = r*r-(u1-cz)*(u1-cz);
+            d0 = d0 > 0 ? sqrtf(d0) : 0; d1 = d1 > 0 ? sqrtf(d1) : 0;
+            float xt0, xt1, wa, wb;
+            if (rail_hi) { xt0 = cx+d0; xt1 = cx+d1; wa = wb = x1; }   /* wood toward +x */
+            else         { xt0 = cx-d0; xt1 = cx-d1; wa = wb = x0; }   /* wood toward -x */
+            if (xt0 < x0) xt0 = x0; if (xt0 > x1) xt0 = x1;
+            if (xt1 < x0) xt1 = x0; if (xt1 > x1) xt1 = x1;
+            quad(v3(xt0,ytop,u0), v3(xt1,ytop,u1), v3(wb,ytop,u1), v3(wa,ytop,u0), top);
+            quad(v3(xt0,ytop,u0), v3(xt1,ytop,u1), v3(xt1,ybot,u1), v3(xt0,ybot,u0), wall);
+        }
     }
 }
 
@@ -224,7 +272,8 @@ static void bore_fill(float cx, float cz, float r, float x0, float x1, float z0,
  * fill it with bore_fill so the visible cut edge is the smooth circle curve. */
 static void wood_plank_bored(float xa, float xb, float za, float zb,
                              float ytop, float ybot, uint16_t top, uint16_t wall,
-                             const float *hx, const float *hz, const float *hr, int nh) {
+                             const float *hx, const float *hz, const float *hr, int nh,
+                             int axis, int rail_hi, float ylow, uint16_t lip) {
     /* notches (clipped pocket bounding boxes) on this plank — note TWO pockets
      * can share the same x-range (the two corners of a short rail). */
     float nx0[CUE_MAX_POCKET], nx1[CUE_MAX_POCKET], nz0[CUE_MAX_POCKET], nz1[CUE_MAX_POCKET];
@@ -264,12 +313,26 @@ static void wood_plank_bored(float xa, float xb, float za, float zb,
             }
             ns = nn; for (int s = 0; s < ns; s++) { lo[s]=nlo[s]; hi[s]=nhi[s]; }
         }
-        for (int s = 0; s < ns; s++)
-            if (hi[s]-lo[s] > 1e-4f)
-                quad(v3(cx0,ytop,lo[s]), v3(cx1,ytop,lo[s]), v3(cx1,ytop,hi[s]), v3(cx0,ytop,hi[s]), top);
+        int inner_col = (axis == 1) && (rail_hi ? (cx0 <= xa+1e-4f) : (cx1 >= xb-1e-4f));
+        float ix = rail_hi ? xa : xb;          /* x-plank inner (mouth) edge */
+        for (int s = 0; s < ns; s++) {
+            if (hi[s]-lo[s] <= 1e-4f) continue;
+            quad(v3(cx0,ytop,lo[s]), v3(cx1,ytop,lo[s]), v3(cx1,ytop,hi[s]), v3(cx0,ytop,hi[s]), top);
+            /* inner-edge riser — only where wood actually reaches the mouth edge,
+             * so pocket mouths stay open (no wood line across the side pockets). */
+            if (ylow < ytop) {
+                if (axis == 0 && rail_hi && lo[s] <= za+1e-4f)
+                    quad(v3(cx0,ytop,za), v3(cx1,ytop,za), v3(cx1,ylow,za), v3(cx0,ylow,za), lip);
+                else if (axis == 0 && !rail_hi && hi[s] >= zb-1e-4f)
+                    quad(v3(cx0,ytop,zb), v3(cx1,ytop,zb), v3(cx1,ylow,zb), v3(cx0,ylow,zb), lip);
+                else if (inner_col)
+                    quad(v3(ix,ytop,lo[s]), v3(ix,ytop,hi[s]), v3(ix,ylow,hi[s]), v3(ix,ylow,lo[s]), lip);
+            }
+        }
     }
     for (int i = 0; i < ni; i++)                                /* bore EACH pocket */
-        bore_fill(hx[pid[i]], hz[pid[i]], hr[pid[i]], nx0[i], nx1[i], nz0[i], nz1[i], ytop, ybot, top, wall);
+        bore_fill(hx[pid[i]], hz[pid[i]], hr[pid[i]], nx0[i], nx1[i], nz0[i], nz1[i],
+                  ytop, ybot, top, wall, axis, rail_hi);
 }
 
 /* ---- cloth markings (baulk line / D / spots) -------------------------- */
@@ -299,10 +362,10 @@ static void cloth_arc(float cx, float cz, float r, float a0, float a1, float w, 
 /* Baulk line + D (snooker & UK8), the six colour spots (snooker), or the foot
  * spot (US pool). Drawn in the bed layer so balls/cushions/shadows occlude them. */
 static void emit_table_markings(const CueTable *t) {
-    uint16_t lc = shade565(t->cloth, 1.40f);     /* faint lighter cloth line */
-    uint16_t sc = RGB565C(205, 205, 190);        /* spot — off-white */
+    uint16_t lc = shade565(t->cloth, 1.65f);     /* lighter cloth line */
+    uint16_t sc = RGB565C(220, 220, 205);        /* spot — off-white */
     float hw = t->half_wid, hl = t->half_len, R = t->R;
-    float lw = R * 0.16f, sr = R * 0.40f;
+    float lw = R * 0.22f, sr = R * 0.42f;
     if (t->is_snooker || t->kind == CUE_GAME_UK8) {
         float bx = t->baulk_x, dr = t->d_radius;
         cloth_line(bx, -(hw-R*0.5f), bx, hw-R*0.5f, lw, lc);        /* baulk line */
@@ -321,6 +384,11 @@ static void emit_table_markings(const CueTable *t) {
 }
 
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
+    /* Lip roll is scaled to each pocket's mouth radius (pr), so mode 1 already
+     * gives a proportionate cloth fall on every table — the snooker drop only
+     * looked hard earlier because the lips were being dropped (buffer overflow),
+     * not because the roll was too shallow. */
+    s_lip_mode = 1;
     { extern char *getenv(const char*); const char *e = getenv("CUE_LIP"); if (e) s_lip_mode = e[0]-'0'; }
     { extern char *getenv(const char*); const char *e2 = getenv("CUE_BALLSET"); if (e2) s_ball_set = e2[0]-'0'; }
     s_ntab = 0;
@@ -333,8 +401,9 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     const float hl = t->half_len, hw = t->half_wid;
     const float rw = t->rail_w;
     const float cw = rw * 0.63f;        /* cushion depth (nose → cushion back); +50% for a beefier rail */
-    const float nose_h = t->cushion_h;  /* contact height — the flat cushion top */
-    const float rail_h = nose_h;        /* wood top level WITH the flat cushion top */
+    const float nose_h = t->cushion_h;       /* nose contact line (bottom of the front face) */
+    const float flat_h = nose_h * 1.30f;     /* top of the small VERTICAL nose front face */
+    const float rail_h = flat_h;             /* flat cushion top & wood top, level at flat_h */
     uint16_t wood = t->rail, woodt = t->rail_top;
 
     /* Cloth bed — fanned from the centre over the knuckle boundary (w->jaw is
@@ -342,27 +411,29 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * and the pocket MOUTHS are real gaps (the angled jaws stay visible). */
     int nb = w->njaw;
     for (int i = 0; i < nb; i++) {
-        Vec3 a = v3(w->jaw[i].x, 0, w->jaw[i].z);
-        Vec3 b = v3(w->jaw[(i + 1) % nb].x, 0, w->jaw[(i + 1) % nb].z);
+        /* Run the felt boundary out under the cushions, but ONLY near the corner
+         * pockets (jaw_pushed fades to zero elsewhere) so the middle pockets are
+         * untouched and the corners get felt framing them. */
+        Vec3 a = jaw_pushed(w, t->pr_corner, cw, w->jaw[i]);
+        Vec3 b = jaw_pushed(w, t->pr_corner, cw, w->jaw[(i + 1) % nb]);
         /* Edges within a chain (i even) are the straight nose; edges ACROSS a
          * pocket (i odd) are the mouth — cut it as a CURVED arc bulging toward
          * the table so the pocket drop is rounded, not a straight chord. */
         if (i & 1) {
+            /* Mouth edge: the felt is cut on a CIRCLE around the FUNCTIONAL drop
+             * (so it accounts for the pocket setback, not the jaw position) — the
+             * bed runs in close to the drop and the lip finishes from there. */
             Vec3 m = v3((a.x + b.x) * 0.5f, 0, (a.z + b.z) * 0.5f);
-            float ml = sqrtf(m.x * m.x + m.z * m.z);
-            Vec3 din = (ml > 1e-5f) ? v3(-m.x / ml, 0, -m.z / ml) : v3(0, 0, 0);
-            float chord = sqrtf((b.x-a.x)*(b.x-a.x) + (b.z-a.z)*(b.z-a.z));
-            float blg = chord * 0.32f;                 /* curved mouth arc (same for all) */
-            Vec3 c = v3(m.x + din.x * blg * 2.0f, 0, m.z + din.z * blg * 2.0f);
-            const int N = 6;
-            Vec3 arc[N + 1]; arc[0] = a;
-            for (int k = 1; k <= N; k++) {
-                float tt = (float)k / N, o = 1.0f - tt;
-                Vec3 p = v3(o*o*a.x + 2*o*tt*c.x + tt*tt*b.x, 0,
-                            o*o*a.z + 2*o*tt*c.z + tt*tt*b.z);
-                tri(v3(0, 0, 0), arc[k-1], p, t->cloth);
-                arc[k] = p;
+            int pidx = 0; float best = 1e9f;
+            for (int q = 0; q < w->npocket; q++) {
+                float dx = w->pocket[q].x - m.x, dz = w->pocket[q].z - m.z, dd = dx*dx + dz*dz;
+                if (dd < best) { best = dd; pidx = q; }
             }
+            const int N = 6;
+            Vec3 arc[N + 1];
+            pocket_circ_arc(w->pocket[pidx], w->pocket_r[pidx] * 1.35f, a, b, arc, N);
+            for (int k = 1; k <= N; k++)
+                tri(v3(0, 0, 0), arc[k-1], arc[k], t->cloth);
             /* the baize lip (drop) is emitted AFTER the pocket voids — see
              * emit_pocket_lips() below — so the void can't draw its rim across it */
         } else {
@@ -380,9 +451,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * above the nose, then the cloth top slopes back to the rail. The base is
      * set back from the nose by `ub` so the nose overhangs (the "cut in below"). */
     uint16_t fdark = shade565(t->cloth, 0.55f);   /* undercut face (in shadow) */
-    uint16_t face  = shade565(t->cloth, 0.72f);   /* the nose flat */
+    uint16_t face  = shade565(t->cloth, 0.72f);   /* the vertical nose front face */
     uint16_t ctop  = shade565(t->cloth, 0.92f);   /* cloth top to the rail */
-    const float flat_h = nose_h;                  /* flat top — level, no top angle */
     const float ub = 0.45f * t->R;                /* undercut / overhang */
     for (int s = 0; s < w->nseg; s++) {
         const CueSeg *sg = &w->seg[s];
@@ -399,33 +469,41 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             const CueSeg *nx = &w->seg[s+1];
             if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) { nb = v3_norm(v3_add(sg->n, nx->n)); sharedB = 1; }
         }
-        /* Mitre facing: extend the free-tip NOSE along the mitre (cyan→yellow)
-         * line only until it reaches the cushion's FULL DEPTH — the rail back
-         * plane (±(hw or hl)+cw). Direction (mitre angle) unchanged. */
+        /* Pocket facing: extend the free-tip NOSE along its own (mitre/tangent)
+         * direction — CONTINUING THE SAME ANGLE — into the wood frame, to the
+         * cushion's full depth plus a small margin so it tucks under the raised
+         * wood lip. Works for both straight (US) and curved (UK/snooker) jaws:
+         * the tip carries on at its angle instead of turning back on itself. */
         if (sg->kind == 1 && (!sharedA || !sharedB)) {
+            const float margin = 0.55f * cw;
             int afree = !sharedA;
-            Vec3 kn = afree ? sg->b : sg->a;     /* shared knuckle (on the rail) */
-            Vec3 tp = afree ? sg->a : sg->b;     /* free tip */
-            Vec3 M = v3_norm(v3_sub(tp, kn));    /* mitre direction */
+            Vec3 kn = afree ? sg->b : sg->a;     /* shared knuckle (toward the rail) */
+            Vec3 tp = afree ? sg->a : sg->b;     /* free tip (at the pocket mouth) */
+            Vec3 M = v3_norm(v3_sub(tp, kn));    /* the facing's own direction */
             float t = 0.0f;
             if (hw - fabsf(kn.z) < hl - fabsf(kn.x)) {   /* knuckle on a z-rail */
-                float target = (kn.z > 0 ? hw + cw : -(hw + cw));
+                float target = (kn.z > 0 ? hw + cw + margin : -(hw + cw + margin));
                 if (fabsf(M.z) > 1e-4f) t = (target - tp.z) / M.z;
             } else {                                     /* knuckle on an x-rail */
-                float target = (kn.x > 0 ? hl + cw : -(hl + cw));
+                float target = (kn.x > 0 ? hl + cw + margin : -(hl + cw + margin));
                 if (fabsf(M.x) > 1e-4f) t = (target - tp.x) / M.x;
             }
             if (t > 0.0f) { Vec3 e = v3_add(tp, v3_scale(M, t)); if (afree) pa = e; else pb = e; }
         }
         float uba = sharedA ? ub : 0.0f, ubb = sharedB ? ub : 0.0f;
-        float cwa = sharedA ? cw : 0.0f, cwb = sharedB ? cw : 0.0f;
+        /* Back-vertex depth. Shared ends reach the full depth cw; a FREE tip
+         * collapses to 0 because the nose was already extended along its tangent
+         * to the rail plane above — the facing continues at the same angle and
+         * comes to a clean point there (US mitre and curved jaws alike). */
+        float cwa = sharedA ? cw : 0.0f;
+        float cwb = sharedB ? cw : 0.0f;
         Vec3 ba = v3(pa.x - na.x*uba, 0, pa.z - na.z*uba);
         Vec3 bb = v3(pb.x - nb.x*ubb, 0, pb.z - nb.z*ubb);
         Vec3 an = v3(pa.x, nose_h, pa.z), bn = v3(pb.x, nose_h, pb.z);
         Vec3 af = v3(pa.x, flat_h, pa.z), bf = v3(pb.x, flat_h, pb.z);
         /* straight rail nose (kind 0): clean perpendicular back at depth cw (a
          * straight edge at ±(hw|hl)+cw) so the wood inner edge can touch it
-         * exactly. Curved jaws keep the averaged normal for top continuity. */
+         * exactly. Facings keep the averaged normal for top continuity. */
         Vec3 bka = (sg->kind == 0) ? sg->n : na;
         Vec3 bkb = (sg->kind == 0) ? sg->n : nb;
         Vec3 ar = v3(pa.x - bka.x*cwa, rail_h, pa.z - bka.z*cwa);
@@ -444,7 +522,11 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * touch inside that (0.78·cw) — the wood reaches the cushion (no gap), the
      * cushion (drawn after, at rail_h) cleanly covers the tiny overlap. */
     const float ibx = hl + cw, ibz = hw + cw;   /* wood inner edge EXACTLY at the cushion back */
-    const float plank_y = rail_h;   /* wood top exactly level with the flat cushion top */
+    /* Raise the wood top a hair above the flat cushion so the frame OVERLAPS and
+     * hides the cushion back that now tucks under it (jaw_back runs the cushion
+     * past the inner edge). A short inner riser closes the step down to rail_h. */
+    const float frame_lift = 0.085f * t->R;
+    const float plank_y = rail_h + frame_lift;
     float hx[CUE_MAX_POCKET], hz[CUE_MAX_POCKET], hr[CUE_MAX_POCKET];
     for (int p = 0; p < w->npocket; p++) {
         hx[p] = w->pocket[p].x; hz[p] = w->pocket[p].z;
@@ -453,14 +535,19 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     int nh = w->npocket;
     uint16_t wbore = shade565(woodt, 0.42f);   /* internal bore wall (in shadow) */
     const float bore_bot = -0.002f;            /* bore wall reaches the bed; throat continues below */
-    wood_plank_bored(-ox, ox,  ibz,  oz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh); /* +z */
-    wood_plank_bored(-ox, ox, -oz, -ibz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh); /* -z */
-    wood_plank_bored(ibx, ox, -ibz, ibz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh); /* +x */
-    wood_plank_bored(-ox,-ibx,-ibz, ibz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh); /* -x */
-    quad(v3(-ox,rail_h,oz), v3(ox,rail_h,oz), v3(ox,0,oz), v3(-ox,0,oz), wood);
-    quad(v3(ox,rail_h,-oz), v3(-ox,rail_h,-oz), v3(-ox,0,-oz), v3(ox,0,-oz), wood);
-    quad(v3(ox,rail_h,oz), v3(ox,rail_h,-oz), v3(ox,0,-oz), v3(ox,0,oz), wood);
-    quad(v3(-ox,rail_h,-oz), v3(-ox,rail_h,oz), v3(-ox,0,oz), v3(-ox,0,-oz), wood);
+    /* Inner-edge risers (the short wood lip dropping from the raised plank top to
+     * rail_h along the mouth edge) are drawn INSIDE wood_plank_bored per wood
+     * column, so they skip the pocket mouths (no wood line across the side
+     * pockets). rail_h is passed as the riser bottom. */
+    uint16_t wlip = shade565(woodt, 0.80f);
+    wood_plank_bored(-ox, ox,  ibz,  oz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh, 0, 1, rail_h, wlip); /* +z */
+    wood_plank_bored(-ox, ox, -oz, -ibz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh, 0, 0, rail_h, wlip); /* -z */
+    wood_plank_bored(ibx, ox, -ibz, ibz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh, 1, 1, rail_h, wlip); /* +x */
+    wood_plank_bored(-ox,-ibx,-ibz, ibz,  plank_y, bore_bot, woodt, wbore, hx, hz, hr, nh, 1, 0, rail_h, wlip); /* -x */
+    quad(v3(-ox,plank_y,oz), v3(ox,plank_y,oz), v3(ox,0,oz), v3(-ox,0,oz), wood);
+    quad(v3(ox,plank_y,-oz), v3(-ox,plank_y,-oz), v3(-ox,0,-oz), v3(ox,0,-oz), wood);
+    quad(v3(ox,plank_y,oz), v3(ox,plank_y,-oz), v3(ox,0,-oz), v3(ox,0,oz), wood);
+    quad(v3(-ox,plank_y,-oz), v3(-ox,plank_y,oz), v3(-ox,0,oz), v3(-ox,0,-oz), wood);
 
     /* Pockets = circular VOIDS you look down into. The bed is already cut at
      * the mouth, so a downward cone gives the recess. The OUTWARD half of each
@@ -474,7 +561,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     const float floor_y = s_is_snooker ? -0.105f : -0.055f;
     for (int p = 0; p < w->npocket; p++) {
         float cx = w->pocket[p].x, cz = w->pocket[p].z;
-        float r = (p < 4) ? t->pr_corner : t->pr_side;
+        float r = w->pocket_r[p];     /* void = the functional drop (matches the red line) */
         Vec3 floor_c = v3(cx, floor_y, cz);
         const int N = 20;
         float base = atan2f(cz, cx);
@@ -495,6 +582,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         }
     }
 
+    s_lip_ntab = s_ntab;      /* lips drawn last + depth-write OFF so balls cover them */
     emit_pocket_lips(t, w);   /* drop lip last → layers over the voids cleanly */
 }
 
@@ -561,11 +649,14 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
     s_focal = 64.0f / tanf(v->fov_deg * (3.14159265f / 180.0f) * 0.5f);
 
     s_nstri = 0;
+    s_lip_nstri = -1;
     for (int i = 0; i < s_ntab; i++) {
         if (i == s_bed_ntab) s_bed_nstri = s_nstri;   /* bed→raised boundary */
+        if (i == s_lip_ntab) s_lip_nstri = s_nstri;   /* raised→lip boundary */
         add_stri(s_tab[i].v[0], s_tab[i].v[1], s_tab[i].v[2],
                  s_tab[i].nrm, s_tab[i].color);
     }
+    if (s_lip_nstri < 0) s_lip_nstri = s_nstri;
 
     /* Balls → impostor sprites (+ shadow discs). */
     s_nspr = 0; s_nshadow = 0;
@@ -966,11 +1057,20 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
 
     /* raised table geometry (cushions, rail frame, pocket voids) — depth-tested
      * over the shadows so a cushion/rail correctly hides a shadow behind it. */
-    for (int i = s_bed_nstri; i < s_nstri; i++) {
+    for (int i = s_bed_nstri; i < s_lip_nstri; i++) {
         const STri *t = &s_stri[i];
         r3d_tri(t->x0, t->y0, t->d0, t->x1, t->y1, t->d1,
                 t->x2, t->y2, t->d2, t->color, y0, y1);
     }
+    /* Pocket drop lips: depth-TESTED (cushions/wood occlude them) but NOT
+     * depth-WRITING, so the balls drawn afterwards always cover them. */
+    r3d_set_depth_write(0);
+    for (int i = s_lip_nstri; i < s_nstri; i++) {
+        const STri *t = &s_stri[i];
+        r3d_tri(t->x0, t->y0, t->d0, t->x1, t->y1, t->d1,
+                t->x2, t->y2, t->d2, t->color, y0, y1);
+    }
+    r3d_set_depth_write(1);
 
     /* aim dots (cue path, pale yellow) + object-ball path (cyan) */
     for (int i = 0; i < s_ndot; i++)

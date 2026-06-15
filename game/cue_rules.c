@@ -45,8 +45,8 @@ void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
     if (r->kind) {
         r->target = 0; r->reds_left = t->reds ? t->reds : 15;
         /* colour spots by value 2..7 */
-        r->spot[2] = v3(t->baulk_x, t->R, +t->d_radius);   /* yellow */
-        r->spot[3] = v3(t->baulk_x, t->R, -t->d_radius);   /* green  */
+        r->spot[2] = v3(t->baulk_x, t->R, -t->d_radius);   /* yellow = right of the D */
+        r->spot[3] = v3(t->baulk_x, t->R, +t->d_radius);   /* green  = left of the D */
         r->spot[4] = v3(t->baulk_x, t->R, 0.0f);           /* brown  */
         r->spot[5] = v3(t->blue_x,  t->R, 0.0f);           /* blue   */
         r->spot[6] = v3(t->pink_x,  t->R, 0.0f);           /* pink   */

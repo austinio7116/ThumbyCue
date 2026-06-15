@@ -26,6 +26,11 @@ void r3d_raster_set_fb(uint16_t *fb) {
 
 uint16_t *r3d_depth_buffer(void) { return s_depth; }
 
+/* When 0, r3d_tri still depth-TESTS but does not WRITE depth — used for the
+ * pocket lips so cushions occlude them yet balls always draw over them. */
+static int s_depth_write = 1;
+void r3d_set_depth_write(int on) { s_depth_write = on; }
+
 void r3d_depth_clear(int y_min, int y_max) {
     if (y_min < 0) y_min = 0;
     if (y_max > R3D_FB_H) y_max = R3D_FB_H;
@@ -154,7 +159,7 @@ void r3d_tri(float ax, float ay, uint16_t az,
             if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
                 uint16_t d = (uint16_t)z;
                 if (d > dp_row[px]) {
-                    dp_row[px] = d;
+                    if (s_depth_write) dp_row[px] = d;
                     fb_row[px] = color;
                 }
             }

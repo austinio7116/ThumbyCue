@@ -37,6 +37,7 @@ void cue_world_defaults(CueWorld *w, float R, float mass) {
      * asin(0.27). This tilt is what couples top/back spin into the rebound. */
     w->cush_tilt = asinf(0.27f);
     w->first_hit = -1;
+    w->first_hit_idx = -1;
     w->_acc = 0.0f;
 }
 
@@ -311,9 +312,15 @@ static void substep(CueWorld *w, CueBall *balls, int n, float h, uint32_t *ev) {
         if (!b->on) continue;
         if (b->drop > 0.0f) {
             Vec3 pc = w->pocket[b->pocket];
-            if (b->pocket < 4 && w->drop_back > 0.0f) {   /* corner: pull deeper into the pocket */
+            /* Pull the sinking ball further back INTO the pocket (past the mouth).
+             * The pocket centre sits radially outward from the table centre, so
+             * the radial direction is "deeper in" for every pocket — and for a
+             * middle pocket (x≈0 or z≈0) that radial IS the straight-back rail
+             * normal. Corners use the deep fall, middles a shallow setback. */
+            float back = (b->pocket < 4) ? w->drop_back : w->drop_back_side;
+            if (back > 0.0f) {
                 float l = sqrtf(pc.x*pc.x + pc.z*pc.z);
-                if (l > 1e-5f) { pc.x += pc.x/l * w->drop_back; pc.z += pc.z/l * w->drop_back; }
+                if (l > 1e-5f) { pc.x += pc.x/l * back; pc.z += pc.z/l * back; }
             }
             float k = h * 12.0f; if (k > 1.0f) k = 1.0f;
             b->pos.x += (pc.x - b->pos.x) * k;
@@ -338,7 +345,7 @@ static void substep(CueWorld *w, CueBall *balls, int n, float h, uint32_t *ev) {
             if (!balls[j].on || balls[j].drop > 0.0f) continue;
             if (collide_ball_ball(w, &balls[i], &balls[j])) {
                 if (ev) *ev |= CUE_EV_BALL_HIT;
-                if (w->first_hit < 0 && i == 0) w->first_hit = balls[j].id;
+                if (w->first_hit < 0 && i == 0) { w->first_hit = balls[j].id; w->first_hit_idx = j; }
             }
         }
     }

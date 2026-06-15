@@ -32,7 +32,9 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->gap_corner = 2.667f * t->R; t->gap_side = 2.50f * t->R;
         t->facing_len = 1.667f * t->R;
         t->ang_corner = 45.0f; t->ang_side = 70.0f;
-        t->off_corner = 0.42f * t->R; t->off_side = 1.25f * t->R;
+        /* Throat set back into the wood so the bore circle clears the (deepened)
+         * cushion back and a proper wood ring is cut — see reach math in PLAN. */
+        t->off_corner = 0.60f * t->R; t->off_side = 1.25f * t->R;
         t->jaw_r = 0.004f;
         t->cloth = RGB565C(22, 120, 70);
         t->rail = RGB565C(96, 54, 26); t->rail_top = RGB565C(128, 78, 38);
@@ -72,7 +74,11 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->gap_corner = 2.45f * t->R; t->gap_side = 2.18f * t->R;
         t->facing_len = 1.25f * t->R;
         t->ang_corner = 60.0f; t->ang_side = 80.0f;
-        t->off_corner = 0.30f * t->R; t->off_side = 1.00f * t->R;
+        /* Throat set well back into the wood: the small snooker pocket radius is
+         * < the deepened cushion depth, so without this the bore circle never
+         * reaches the wood and no cutaway is cut (the fall is realistically set
+         * back behind the mouth anyway). */
+        t->off_corner = 1.40f * t->R; t->off_side = 1.00f * t->R;
         t->jaw_r = 0.012f;
         t->baulk_x = -t->half_len + 0.737f * sc;
         t->d_radius = 0.292f * sc;
@@ -84,7 +90,13 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->spot = RGB565C(200, 200, 200);
         t->nballs = (t->reds == 10) ? 17 : 22;
     }
-    t->drop_back = 0.9f * t->R;   /* corner drops sink this far further into the pocket (tweak) */
+    /* Drop-zone setback — how far the potted ball sinks BACK into the pocket
+     * (past the cushion mouth) before it disappears. Scaled off each table's
+     * pocket-mouth size so it tracks the official openings: a corner has a deep
+     * fall (~0.6× its mouth radius), a middle pocket is shallow and the ball
+     * must enter centrally, so it pulls straight back only a little (~0.3×). */
+    t->drop_back      = 0.60f * t->pr_corner;
+    t->drop_back_side = 0.30f * t->pr_side;
 }
 
 /* Inward unit normal of segment a→b. The cushion boundary is built as one
@@ -172,6 +184,7 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
     w->cush_tilt = asinf((t->cushion_h - t->R) / t->R);
     w->jaw_r = t->jaw_r;
     w->drop_back = t->drop_back;
+    w->drop_back_side = t->drop_back_side;
 
     const float hl = t->half_len, hw = t->half_wid, R = t->R;
 
@@ -336,8 +349,8 @@ static int rack_snooker(const CueTable *t, CueBall *b) {
     const float R = t->R;
     int n = 0;
     set_ball(&b[n++], CUE_ID_CUE, t->baulk_x, -t->d_radius * 0.4f, R);
-    set_ball(&b[n++], CUE_ID_YELLOW, t->baulk_x, +t->d_radius, R);
-    set_ball(&b[n++], CUE_ID_GREEN,  t->baulk_x, -t->d_radius, R);
+    set_ball(&b[n++], CUE_ID_YELLOW, t->baulk_x, -t->d_radius, R);   /* yellow = right of the D */
+    set_ball(&b[n++], CUE_ID_GREEN,  t->baulk_x, +t->d_radius, R);   /* green  = left of the D */
     set_ball(&b[n++], CUE_ID_BROWN,  t->baulk_x, 0.0f, R);
     set_ball(&b[n++], CUE_ID_BLUE,   t->blue_x, 0.0f, R);
     set_ball(&b[n++], CUE_ID_PINK,   t->pink_x, 0.0f, R);

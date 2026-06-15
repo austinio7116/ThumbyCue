@@ -56,7 +56,8 @@ typedef struct {
     float ang_corner, ang_side; /* facing splay from the rail line (deg) */
     float off_corner, off_side; /* pocket-centre offset beyond the boundary (m) */
     float jaw_r;                /* small knuckle rounding radius (m) */
-    float drop_back;            /* corner drop pulled this far further INTO the pocket (m) */
+    float drop_back;            /* CORNER drop pulled this far further INTO the pocket (m) */
+    float drop_back_side;       /* MIDDLE drop pulled straight back into the pocket (m, shallower) */
 
     /* Snooker layout (ignored for pool). */
     float baulk_x, d_radius, blue_x, pink_x, black_x;

@@ -79,6 +79,7 @@ static float s_fl_az, s_fl_el = 0.55f, s_fl_dist = 0.5f;  /* free-look orbit */
 static Vec3  s_look;              /* free-look look-at centre (pan) */
 static Vec3  s_orbit_c;            /* frozen camera-orbit centre (freeview) */
 static int   s_freeview;          /* shot cam: 0 = follow cue ball, 1 = free-roam */
+static int   s_follow_idx;         /* ball the shot-cam tracks: 0 = cue, else the struck object ball */
 static float s_power, s_tip_side, s_tip_vert;
 static CraftRawButtons s_prev;
 static float s_frame_ms;
@@ -115,6 +116,13 @@ static void new_frame(void) {
 static Vec3 cue_pos(void) {
     return s_balls[0].on ? s_balls[0].pos : cue_table_cue_home(&s_table);
 }
+/* Position the shot-cam tracks: the struck object ball once contact is made,
+ * otherwise the cue ball. */
+static Vec3 follow_pos(void) {
+    if (s_follow_idx > 0 && s_follow_idx < s_n && s_balls[s_follow_idx].on)
+        return s_balls[s_follow_idx].pos;
+    return cue_pos();
+}
 
 void cue_game_set_kind(int snooker) { s_kind = snooker ? CUE_GAME_SNK15 : CUE_GAME_UK8; new_frame(); s_screen = SC_GAME; }
 void cue_game_set_mode(int mode) { if (mode < 0) mode = 0; if (mode >= CUE_GAME_COUNT) mode = CUE_GAME_COUNT-1; s_kind = mode; new_frame(); s_screen = SC_GAME; }
@@ -135,6 +143,8 @@ static void begin_shot(void) {
     s_world.first_hit = -1;            /* physics records the cue's real first contact */
     s_orbit_c = cue_pos();
     s_freeview = 0;                    /* follow the cue ball by default */
+    s_follow_idx = 0;                  /* until the cue ball strikes an object ball */
+    s_world.first_hit_idx = -1;
     s_first_hit = -1; s_cushion_seen = 0;
     for (int i = 0; i < s_n; i++) s_was_on[i] = s_balls[i].on;
     cue_audio_sfx(CUE_SFX_STRIKE, s_power);
@@ -329,6 +339,17 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
         if (ev & CUE_EV_POCKET)   cue_audio_sfx(CUE_SFX_POT, 0.2f + 0.7f*hit_i);
         /* the cue ball's true first object-ball contact, recorded by the physics */
         s_first_hit = s_world.first_hit;
+        /* Auto-cam: once the cue ball strikes an object ball, follow THAT ball;
+         * if it's then potted (or otherwise leaves play), fall back to the cue.
+         * On the BREAK we never switch — following one ball into the scattering
+         * pack is chaotic, so the break stays locked on the cue ball. */
+        if (!s_freeview && !s_rules.break_shot) {
+            if (s_follow_idx == 0 && s_world.first_hit_idx > 0)
+                s_follow_idx = s_world.first_hit_idx;
+            if (s_follow_idx > 0 &&
+                (s_follow_idx >= s_n || !s_balls[s_follow_idx].on))
+                s_follow_idx = 0;          /* object ball potted → back to the cue */
+        }
         if (!moving) {
             /* gather what happened, hand to the rules engine */
             int potted[CUE_MAX_BALLS], np = 0, cue_scratch = !s_balls[0].on;
@@ -467,7 +488,9 @@ static void build_view(CueView *v) {
     }
     /* During a shot the camera FOLLOWS the cue ball; tapping A enters freeview,
      * where it orbits the frozen point and the player roams with the controls. */
-    Vec3 P = (s_state == GS_SHOOTING && s_freeview) ? s_orbit_c : cue_pos();
+    Vec3 P = (s_state == GS_SHOOTING && s_freeview) ? s_orbit_c
+           : (s_state == GS_SHOOTING)               ? follow_pos()
+           :                                          cue_pos();
     Vec3 dir = v3(cosf(s_view_az),0,sinf(s_view_az));
     if (s_freelook) {
         /* orbit the look-at point; pitch from a low angle up to near-overhead;

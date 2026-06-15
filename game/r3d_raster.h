@@ -20,6 +20,9 @@
 #include "cue_types.h"
 
 void r3d_raster_set_fb(uint16_t *fb);
+
+/* Toggle depth WRITE for r3d_tri (depth test still applies when off). */
+void r3d_set_depth_write(int on);
 void r3d_depth_clear(int y_min, int y_max);
 
 /* Direct depth-buffer access for renderers with their own pixel loops
