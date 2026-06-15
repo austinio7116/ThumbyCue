@@ -345,12 +345,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
         Vec3 bb = v3(pb.x - nb.x*ubb, 0, pb.z - nb.z*ubb);
         Vec3 an = v3(pa.x, nose_h, pa.z), bn = v3(pb.x, nose_h, pb.z);
         Vec3 af = v3(pa.x, flat_h, pa.z), bf = v3(pb.x, flat_h, pb.z);
-        /* straight rail nose (kind 0): uniform-depth back (own normal) so the
-         * cushion doesn't taper toward the knuckle; jaws keep the averaged normal */
-        Vec3 bka = (sg->kind == 0) ? sg->n : na;
-        Vec3 bkb = (sg->kind == 0) ? sg->n : nb;
-        Vec3 ar = v3(pa.x - bka.x*cwa, rail_h, pa.z - bka.z*cwa);
-        Vec3 br = v3(pb.x - bkb.x*cwb, rail_h, pb.z - bkb.z*cwb);
+        Vec3 ar = v3(pa.x - na.x*cwa, rail_h, pa.z - na.z*cwa);
+        Vec3 br = v3(pb.x - nb.x*cwb, rail_h, pb.z - nb.z*cwb);
         ribbon(ba, bb, bn, an, fdark);      /* undercut face (leans to nose) */
         quad(an, bn, bf, af, face);            /* small flat (planar) */
         ribbon(af, bf, br, ar, ctop);       /* cloth top → rail */
