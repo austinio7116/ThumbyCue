@@ -63,7 +63,10 @@ typedef struct {
     float mu_bb;      /* friction (throw) */
     /* Cushion. */
     float e_cush;     /* restitution */
-    float mu_cush;    /* rail friction */
+    float mu_cush;    /* rail friction (deflects the bounce; incoming english still bends it) */
+    float cush_spin;  /* 0..1: how much of the rail friction impulse becomes NEW spin on the
+                       * ball. <1 means the cushion imparts less spin while the bounce-angle
+                       * effect of incoming spin is preserved (asymmetric). */
     float cush_tilt;  /* contact-normal tilt from horizontal (rad), from nose height */
 
     /* Geometry (filled by cue_table). */

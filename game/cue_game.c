@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MAX_STRIKE_SPEED 6.0f
+#define MAX_STRIKE_SPEED 8.5f
 #define DEG2RAD (3.14159265f / 180.0f)
 
 /* Top-level screens. */
@@ -81,6 +81,8 @@ static Vec3  s_orbit_c;            /* frozen camera-orbit centre (freeview) */
 static int   s_freeview;          /* shot cam: 0 = follow cue ball, 1 = free-roam */
 static int   s_follow_idx;         /* ball the shot-cam tracks: 0 = cue, else the struck object ball */
 static float s_power, s_tip_side, s_tip_vert;
+static int   s_place_restrict;     /* 1 = confine placement to the D / head string */
+static int   s_inhand_avail;       /* ball-in-hand not yet used this shot → can re-place */
 static CraftRawButtons s_prev;
 static float s_frame_ms;
 static float s_menu_spin;         /* orbiting backdrop angle */
@@ -109,7 +111,10 @@ static void new_frame(void) {
         s_ballset = default_ballset(s_kind);
     rack();
     cue_rules_init(&s_rules, &s_table, s_cpu);
-    s_state = GS_AIM;
+    /* Break: cue ball in hand — start it on the home spot and let the player
+     * place it (in the D for snooker/UK8, behind the head string for US). */
+    s_balls[0].pos = cue_table_cue_home(&s_table);
+    s_state = GS_PLACE; s_place_restrict = 1; s_inhand_avail = 1;
     s_aim = 0; s_view_az = 0; s_power = 0; s_tip_side = s_tip_vert = 0;
     s_freelook = 0;
 }
@@ -135,6 +140,7 @@ void cue_game_set_frame_ms(float ms) { s_frame_ms = ms; }
 
 /* ---- shot strike + resolve ------------------------------------------- */
 static void begin_shot(void) {
+    s_inhand_avail = 0;            /* ball-in-hand is used up once the shot is taken */
     Vec3 dir = v3(cosf(s_aim), 0, sinf(s_aim));
     if (!s_balls[0].on) { s_balls[0].pos = cue_table_cue_home(&s_table); s_balls[0].on = 1; }
     cue_phys_strike(&s_world, &s_balls[0], dir, s_power * MAX_STRIKE_SPEED,
@@ -196,7 +202,7 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
             if (b->b) {                                  /* pan the look-at point */
                 float rx = sinf(s_fl_az), rz = -cosf(s_fl_az);
                 float fx = cosf(s_fl_az), fz = sinf(s_fl_az);
-                float sp = 0.5f * dt;
+                float sp = 1.2f * dt;            /* faster free-look pan */
                 if (b->right) { s_look.x += rx*sp; s_look.z += rz*sp; }
                 if (b->left)  { s_look.x -= rx*sp; s_look.z -= rz*sp; }
                 if (b->up)    { s_look.x += fx*sp; s_look.z += fz*sp; }
@@ -232,8 +238,8 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
          * placement from any angle; the d-pad alone moves the cue ball relative
          * to the camera (UP = away into the screen, RIGHT = screen-right). */
         if (b->rb) {
-            if (b->left)  s_aim -= 1.3f*dt;
-            if (b->right) s_aim += 1.3f*dt;
+            if (b->left)  s_aim += 1.3f*dt;   /* match free-look / aim orbit sense */
+            if (b->right) s_aim -= 1.3f*dt;
             s_view_az = s_aim;
             if (jp(b->a, s_prev.a)) s_state = GS_AIM;
             return;
@@ -246,12 +252,18 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
         float sp = 0.4f * dt;
         s_balls[0].pos.x += (fx*mf + rx*mr) * sp;
         s_balls[0].pos.z += (fz*mf + rz*mr) * sp;
-        float lim = s_table.half_wid - s_table.R;
-        if (s_balls[0].pos.z >  lim) s_balls[0].pos.z =  lim;
-        if (s_balls[0].pos.z < -lim) s_balls[0].pos.z = -lim;
-        float lx = s_table.half_len - s_table.R;
-        if (s_balls[0].pos.x >  lx) s_balls[0].pos.x =  lx;
-        if (s_balls[0].pos.x < -lx) s_balls[0].pos.x = -lx;
+        /* Restrict to the legal region: the D (snooker/UK8) or behind the head
+         * string (US). Full ball-in-hand fouls in US 8-ball still allow anywhere
+         * — handled by the rules flag below. */
+        if (s_place_restrict)
+            s_balls[0].pos = cue_table_clamp_placement(&s_table, s_balls[0].pos);
+        else {
+            float lim = s_table.half_wid - s_table.R, lx = s_table.half_len - s_table.R;
+            if (s_balls[0].pos.z >  lim) s_balls[0].pos.z =  lim;
+            if (s_balls[0].pos.z < -lim) s_balls[0].pos.z = -lim;
+            if (s_balls[0].pos.x >  lx) s_balls[0].pos.x =  lx;
+            if (s_balls[0].pos.x < -lx) s_balls[0].pos.x = -lx;
+        }
         if (jp(b->a, s_prev.a)) s_state = GS_AIM;
         s_view_az = s_aim;
         return;
@@ -363,7 +375,10 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
             else if (s_rules.ball_in_hand) {
                 s_balls[0].on = 1; s_balls[0].pos = cue_table_cue_home(&s_table);
                 s_balls[0].vel = v3(0,0,0); s_balls[0].w = v3(0,0,0);
-                s_state = GS_PLACE;
+                /* snooker / UK8 always play from the D; US 8-ball is in-hand
+                 * anywhere on the table after a foul. */
+                s_place_restrict = (s_table.is_snooker || s_kind == CUE_GAME_UK8);
+                s_state = GS_PLACE; s_inhand_avail = 1;
             } else s_state = GS_AIM;
         }
     }
@@ -423,11 +438,19 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         else ingame_tick(b, dt);
         break;
     case SC_PAUSE: {
-        int sel = menu_move(b, 3);
+        /* When the cue ball is still in hand (break or a foul, shot not yet
+         * taken) offer to re-place it — in case of an unwanted placement. */
+        int can_place = s_inhand_avail && !(s_cpu && s_rules.turn == 1);
+        int n = can_place ? 4 : 3;
+        int sel = menu_move(b, n);
         if (jp(b->menu, s_prev.menu) || jp(b->b,s_prev.b)) s_screen = SC_GAME;
-        else if (sel == 0) s_screen = SC_GAME;             /* resume */
-        else if (sel == 1) { new_frame(); s_screen = SC_GAME; } /* new frame */
-        else if (sel == 2) { s_screen = SC_MAIN; s_cursor = 0; } /* quit to menu */
+        else if (sel == 0) s_screen = SC_GAME;                            /* resume */
+        else if (can_place && sel == 1) {                                /* place cue ball */
+            s_balls[0].on = 1; s_balls[0].vel = v3(0,0,0); s_balls[0].w = v3(0,0,0);
+            s_state = GS_PLACE; s_screen = SC_GAME;
+        }
+        else if (sel == n - 2) { new_frame(); s_screen = SC_GAME; }      /* new frame */
+        else if (sel == n - 1) { s_screen = SC_MAIN; s_cursor = 0; }     /* quit to menu */
         break; }
     case SC_OVER:
         if (jp(b->a, s_prev.a)) { new_frame(); s_screen = SC_GAME; }
@@ -608,8 +631,14 @@ void cue_game_draw_overlay(uint16_t *fb) {
     case SC_PAUSE: {
         dim(fb, 7);
         center(fb, "PAUSED", 18, RGB565C(255,240,200));
-        const char *it[3]={"RESUME","NEW FRAME","QUIT"};
-        menu_list(fb, it, 3, s_cursor, 52);
+        int can_place = s_inhand_avail && !(s_cpu && s_rules.turn == 1);
+        if (can_place) {
+            const char *it[4]={"RESUME","PLACE CUE BALL","NEW FRAME","QUIT"};
+            menu_list(fb, it, 4, s_cursor, 48);
+        } else {
+            const char *it[3]={"RESUME","NEW FRAME","QUIT"};
+            menu_list(fb, it, 3, s_cursor, 52);
+        }
         break; }
     case SC_OVER: {
         dim(fb, 6);

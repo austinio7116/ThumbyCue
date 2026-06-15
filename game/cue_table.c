@@ -247,6 +247,14 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
         Vec3 na = ns, nb = ns;
         for (int o = 0; o < w->nseg; o++) {
             if (o == s) continue;
+            /* Only smooth WITHIN a run of the same kind: the bezier jaw (all
+             * kind=1) stays a continuous rounded knuckle, but a facing must NEVER
+             * pull the straight rail nose's (kind=0) endpoint normal. Snooker's
+             * rail→curve junction is gentle enough to pass the dot test below, so
+             * without this a ball hugging the rail near the knuckle saw a normal
+             * tilted toward the pocket throat — funnelling it into the pocket and
+             * spinning it up off the rail. The jaw circle handles the junction. */
+            if (w->seg[o].kind != w->seg[s].kind) continue;
             Vec3 no = w->seg[o].n;
             if (ns.x*no.x + ns.z*no.z < SMOOTH_COS) continue;   /* sharp corner: keep crisp */
             if (v3_len2(v3_sub(w->seg[o].b, w->seg[s].a)) < 1e-8f ||
@@ -276,9 +284,38 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
 }
 
 Vec3 cue_table_cue_home(const CueTable *t) {
-    if (!t->is_snooker)
-        return v3(-t->half_len * 0.5f, t->R, 0.0f);
-    return v3(t->baulk_x, t->R, -t->d_radius * 0.4f);
+    /* Snooker: in the D between the brown (centre) and yellow spots, so it isn't
+     * sitting on top of the brown. UK 8-ball: centre of the D baseline (the spot).
+     * US pool: behind the head string (the "kitchen"). */
+    if (t->is_snooker)            return v3(t->baulk_x, t->R, -t->d_radius * 0.45f);
+    if (t->kind == CUE_GAME_UK8)  return v3(t->baulk_x, t->R, 0.0f);
+    return v3(-t->half_len * 0.5f, t->R, 0.0f);
+}
+
+/* Clamp a desired cue-ball placement to the legal ball-in-hand region:
+ * inside the D (snooker / UK8) or behind the head string (US pool). Returns the
+ * clamped XZ (y left to the caller). */
+Vec3 cue_table_clamp_placement(const CueTable *t, Vec3 p) {
+    float R = t->R;
+    if (t->is_snooker || t->kind == CUE_GAME_UK8) {
+        /* the D: a half-disc of radius d_radius centred on (baulk_x,0), bulging
+         * toward the baulk cushion (−x). Keep the ball wholly inside it. */
+        float rmax = t->d_radius - R;
+        if (rmax < 0.0f) rmax = 0.0f;
+        if (p.x > t->baulk_x) p.x = t->baulk_x;        /* not past the baulk line */
+        float dx = p.x - t->baulk_x, dz = p.z;
+        float d = sqrtf(dx*dx + dz*dz);
+        if (d > rmax) { float s = rmax / d; p.x = t->baulk_x + dx*s; p.z = dz*s; }
+        return p;
+    }
+    /* US pool: behind the head string (at quarter table from the baulk end). */
+    float head = -t->half_len * 0.5f;
+    float lim = t->half_wid - R;
+    if (p.x > head - R) p.x = head - R;
+    if (p.x < -(t->half_len - R)) p.x = -(t->half_len - R);
+    if (p.z >  lim) p.z =  lim;
+    if (p.z < -lim) p.z = -lim;
+    return p;
 }
 
 /* Per-rack RNG (render-only ball orientation; advances each ball + each rack so

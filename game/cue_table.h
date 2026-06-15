@@ -74,7 +74,11 @@ void cue_table_build_world(const CueTable *t, CueWorld *w);
  * balls[0] is always the cue ball. orient set to identity. */
 int cue_table_rack(const CueTable *t, CueBall *balls);
 
-/* Cue-ball home (head spot / brown-end D) for ball-in-hand placement. */
+/* Cue-ball home (centre of the D / behind the head string) for placement. */
 Vec3 cue_table_cue_home(const CueTable *t);
+
+/* Clamp a desired placement to the legal ball-in-hand region (the D for
+ * snooker/UK8, behind the head string for US pool). */
+Vec3 cue_table_clamp_placement(const CueTable *t, Vec3 p);
 
 #endif

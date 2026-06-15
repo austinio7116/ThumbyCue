@@ -30,12 +30,13 @@ void cue_world_defaults(CueWorld *w, float R, float mass) {
     w->spin_decel = 5.0f * 0.022f * w->g / (2.0f * R);
     w->e_bb = 0.96f;
     w->mu_bb = 0.06f;         /* ball–ball throw friction */
-    w->e_cush = 0.92f;     /* lively cushions */
-    w->mu_cush = 0.18f;
-    /* Cushion nose ≈ 0.635 × ball diameter = 1.27 R above the cloth, so the
-     * contact point sits ~0.27 R above centre; the contact normal tilts up by
-     * asin(0.27). This tilt is what couples top/back spin into the rebound. */
-    w->cush_tilt = asinf(0.27f);
+    w->e_cush = 0.96f;     /* livelier cushions: absorb less energy */
+    w->mu_cush = 0.12f;    /* rail friction — full on the roll axis (proper damping + bend) */
+    w->cush_spin = 0.30f;  /* but only 30% on the VERTICAL axis → far less side-spin pickup */
+    /* Contact point ~0.15 R above centre ⇒ normal tilts up by asin(0.15). Kept
+     * modest so top/back spin still bends the rebound a little, but the roll→side
+     * coupling that built up running english off the rail is much smaller. */
+    w->cush_tilt = asinf(0.15f);
     w->first_hit = -1;
     w->first_hit_idx = -1;
     w->_acc = 0.0f;
@@ -215,8 +216,15 @@ static int collide_surface(const CueWorld *w, CueBall *b, Vec3 N,
         float Jt_max = mu * fabsf(Jn);
         float Jt = (Jt_stop < Jt_max) ? Jt_stop : Jt_max;
         Vec3 Jt_v = v3_scale(that, Jt);
-        b->vel = v3_add(b->vel, v3_scale(Jt_v, 1.0f / m));
-        b->w = v3_add(b->w, v3_scale(v3_cross(r, Jt_v), 1.0f / I));
+        b->vel = v3_add(b->vel, v3_scale(Jt_v, 1.0f / m));   /* full: bends the bounce */
+        /* Apply the angular impulse, but scale ONLY the vertical (side-spin, y)
+         * axis by cush_spin: the rail imparts much less NEW english (which just
+         * makes the ball texture tumble) while the horizontal (roll) axis keeps
+         * full friction so roll is correctly damped — no over-spin build-up, and
+         * incoming english still bent the bounce above (vt fed Jt). */
+        Vec3 dw = v3_scale(v3_cross(r, Jt_v), 1.0f / I);
+        dw.y *= w->cush_spin;
+        b->w = v3_add(b->w, dw);
     }
     b->vel.y = 0.0f;
     return 1;

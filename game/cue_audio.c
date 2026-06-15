@@ -47,12 +47,14 @@ static const SfxModel M_STRIKE  = { 2, {4200, 7200}, {1.6f, 2.0f}, {1.0f, 0.7f},
 /* CUSHION — duller, lower, rubbery thud. */
 static const SfxModel M_CUSHION = { 2, {750, 1300}, {3.0f, 2.5f}, {1.0f, 0.5f},
     0.045f, 0.12f, 1.7f, 0.22f };
-/* POT (soft) — low thunk ~250–520 Hz, longer (~150 ms). Dark. */
-static const SfxModel M_POT_SOFT= { 2, {260, 500}, {3.5f, 3.0f}, {1.0f, 0.6f},
-    0.150f, 0.04f, 2.1f, 0.05f };
-/* POT (hard) — faster, brighter drop with a longer mid body (~220 ms). */
-static const SfxModel M_POT_HARD= { 2, {620, 1050}, {4.0f, 3.0f}, {1.0f, 0.55f},
-    0.200f, 0.10f, 1.9f, 0.16f };
+/* POT — "tock + rumble": a crisp woody mid knock the small speaker can actually
+ * render (780/1500 Hz, fast click attack) layered over a low rolling tail (the
+ * ball settling, 360/620 Hz, ~180 ms). Two voices fired together. The old dark
+ * 260–500 Hz thunk vanished into mud on the device speaker. */
+static const SfxModel M_POT_TOCK   = { 2, {780, 1500}, {2.2f, 2.6f}, {1.0f, 0.55f},
+    0.045f, 0.45f, 1.7f, 0.62f };
+static const SfxModel M_POT_RUMBLE = { 2, {360, 620}, {4.0f, 3.0f}, {1.0f, 0.5f},
+    0.180f, 0.02f, 1.4f, 0.18f };
 /* UI — a clean short blip (this one IS tonal, on purpose). */
 static const SfxModel M_UI      = { 1, {1000, 0}, {30.0f, 0}, {1.0f, 0},
     0.060f, 0.0f, 1.2f, 1.0f };
@@ -145,7 +147,7 @@ void cue_audio_sfx(int which, float in) {
         trigger_sample(cue_clack_pcm, CUE_CLACK_LEN, level * 1.25f, rate);
         break; }
     case CUE_SFX_CUSHION: trigger(&M_CUSHION, level); break;
-    case CUE_SFX_POT:     trigger(in > 0.5f ? &M_POT_HARD : &M_POT_SOFT, level); break;
+    case CUE_SFX_POT:     trigger(&M_POT_TOCK, level); trigger(&M_POT_RUMBLE, level * 0.9f); break;
     default:              trigger(&M_UI, 0.8f); break;
     }
 }
