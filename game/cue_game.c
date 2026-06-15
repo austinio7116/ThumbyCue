@@ -218,9 +218,16 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
             s_state = GS_AIM;
             return;
         }
-        /* ball-in-hand: move the cue ball relative to the CAMERA view (UP =
-         * away into the screen, RIGHT = screen-right), not world axes — else the
-         * d-pad feels mixed up whenever the camera has rotated. */
+        /* ball-in-hand. Hold RB to ORBIT the view (left/right) so you can see the
+         * placement from any angle; the d-pad alone moves the cue ball relative
+         * to the camera (UP = away into the screen, RIGHT = screen-right). */
+        if (b->rb) {
+            if (b->left)  s_aim -= 1.3f*dt;
+            if (b->right) s_aim += 1.3f*dt;
+            s_view_az = s_aim;
+            if (jp(b->a, s_prev.a)) s_state = GS_AIM;
+            return;
+        }
         float az = s_view_az;
         float fx = cosf(az), fz = sinf(az);     /* camera forward (into screen) */
         float rx = sinf(az), rz = -cosf(az);    /* camera right */
@@ -626,7 +633,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
                 fb[yy*CUE_FB_W+3]=c; fb[yy*CUE_FB_W+4]=c; fb[yy*CUE_FB_W+5]=c; }
         }
         draw_spin_indicator(fb, 114, 110, 12);
-        if (s_state == GS_PLACE) center(fb, "PLACE: DPAD  A SET", 119, RGB565C(240,240,160));
+        if (s_state == GS_PLACE) center(fb, "DPAD MOVE  RB LOOK  A OK", 119, RGB565C(240,240,160));
         else if (s_freelook) center(fb, "FREE LOOK  A BACK", 119, RGB565C(150,200,150));
         else if (s_state == GS_AIM) center(fb, "LB LOOK", 119, RGB565C(120,150,120));
         else if (s_state == GS_SHOOTING) center(fb, s_freeview ? "FREEVIEW" : "A FREEVIEW", 119, RGB565C(150,200,150));

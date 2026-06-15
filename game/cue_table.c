@@ -37,6 +37,8 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->cloth = RGB565C(22, 120, 70);
         t->rail = RGB565C(96, 54, 26); t->rail_top = RGB565C(128, 78, 38);
         t->spot = RGB565C(180, 180, 180); t->nballs = 16;
+        /* UK 8-ball baulk line + D (white placed in the D after a foul). */
+        t->baulk_x = -t->half_len * 0.6f; t->d_radius = t->half_wid * 0.35f;
     } else if (kind == CUE_GAME_US8 || kind == CUE_GAME_US9) {
         /* 9 ft US table: 2.54 × 1.27 m, 2.25" balls, ANGLED straight-mitre
          * pockets (sharp points, more open than UK). */

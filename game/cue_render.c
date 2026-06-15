@@ -272,6 +272,54 @@ static void wood_plank_bored(float xa, float xb, float za, float zb,
         bore_fill(hx[pid[i]], hz[pid[i]], hr[pid[i]], nx0[i], nx1[i], nz0[i], nz1[i], ytop, ybot, top, wall);
 }
 
+/* ---- cloth markings (baulk line / D / spots) -------------------------- */
+#define MARK_Y 0.0015f      /* a hair above the cloth so markings sit on top */
+static void cloth_line(float ax, float az, float bx, float bz, float w, uint16_t col) {
+    float dx = bx-ax, dz = bz-az, l = sqrtf(dx*dx+dz*dz);
+    if (l < 1e-6f) return;
+    float px = -dz/l*w*0.5f, pz = dx/l*w*0.5f;
+    quad(v3(ax+px,MARK_Y,az+pz), v3(bx+px,MARK_Y,bz+pz),
+         v3(bx-px,MARK_Y,bz-pz), v3(ax-px,MARK_Y,az-pz), col);
+}
+static void cloth_disc(float cx, float cz, float r, uint16_t col) {
+    const int N = 8; Vec3 c = v3(cx, MARK_Y, cz);
+    for (int k = 0; k < N; k++) {
+        float a0 = k*(6.2831853f/N), a1 = (k+1)*(6.2831853f/N);
+        tri(c, v3(cx+r*cosf(a0),MARK_Y,cz+r*sinf(a0)),
+               v3(cx+r*cosf(a1),MARK_Y,cz+r*sinf(a1)), col);
+    }
+}
+static void cloth_arc(float cx, float cz, float r, float a0, float a1, float w, uint16_t col) {
+    const int N = 14;
+    for (int k = 0; k < N; k++) {
+        float t0 = a0 + (a1-a0)*k/N, t1 = a0 + (a1-a0)*(k+1)/N;
+        cloth_line(cx+r*cosf(t0), cz+r*sinf(t0), cx+r*cosf(t1), cz+r*sinf(t1), w, col);
+    }
+}
+/* Baulk line + D (snooker & UK8), the six colour spots (snooker), or the foot
+ * spot (US pool). Drawn in the bed layer so balls/cushions/shadows occlude them. */
+static void emit_table_markings(const CueTable *t) {
+    uint16_t lc = shade565(t->cloth, 1.40f);     /* faint lighter cloth line */
+    uint16_t sc = RGB565C(205, 205, 190);        /* spot — off-white */
+    float hw = t->half_wid, hl = t->half_len, R = t->R;
+    float lw = R * 0.16f, sr = R * 0.40f;
+    if (t->is_snooker || t->kind == CUE_GAME_UK8) {
+        float bx = t->baulk_x, dr = t->d_radius;
+        cloth_line(bx, -(hw-R*0.5f), bx, hw-R*0.5f, lw, lc);        /* baulk line */
+        cloth_arc(bx, 0.0f, dr, 1.5707963f, 4.7123890f, lw, lc);   /* the D (bulges to baulk) */
+    }
+    if (t->is_snooker) {
+        cloth_disc(t->baulk_x,  t->d_radius, sr, sc);   /* yellow */
+        cloth_disc(t->baulk_x, -t->d_radius, sr, sc);   /* green  */
+        cloth_disc(t->baulk_x,  0.0f,        sr, sc);   /* brown  */
+        cloth_disc(t->blue_x,   0.0f,        sr, sc);   /* blue   */
+        cloth_disc(t->pink_x,   0.0f,        sr, sc);   /* pink   */
+        cloth_disc(t->black_x,  0.0f,        sr, sc);   /* black  */
+    } else {
+        cloth_disc(hl * 0.5f, 0.0f, sr, sc);            /* US pool foot spot (rack apex) */
+    }
+}
+
 void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     { extern char *getenv(const char*); const char *e = getenv("CUE_LIP"); if (e) s_lip_mode = e[0]-'0'; }
     { extern char *getenv(const char*); const char *e2 = getenv("CUE_BALLSET"); if (e2) s_ball_set = e2[0]-'0'; }
@@ -321,6 +369,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             tri(v3(0, 0, 0), a, b, t->cloth);
         }
     }
+    emit_table_markings(t);   /* baulk line / D / spots — part of the bed layer */
     s_bed_ntab = s_ntab;   /* everything after here is raised (cushions/frame/voids) */
 
     /* Cushions from the chain segments: steep cloth playing face up to the
