@@ -949,12 +949,12 @@ void cue_render_set_preview(uint16_t *fb, int cx, int cy, int rad,
     int sb = s_ball_set, ss = s_is_snooker;
     s_ball_set = (ballset < 0 || ballset > 4) ? 0 : ballset;
     s_is_snooker = snooker;
-    /* Show two solids (palette), a stripe (stripe style) and the 8 so sets that
+    /* Two solids (palette), two stripes (stripe style) and the 8 so sets that
      * share a ball or two still read differently. Snooker shows its colours. */
-    uint8_t ids_pool[4] = { 1, 3, 9, 8 };
-    uint8_t ids_snk[4]  = { 1, CUE_ID_YELLOW, CUE_ID_BLUE, CUE_ID_BLACK };
+    uint8_t ids_pool[5] = { 1, 3, 9, 11, 8 };
+    uint8_t ids_snk[5]  = { 1, CUE_ID_YELLOW, CUE_ID_GREEN, CUE_ID_BLUE, CUE_ID_BLACK };
     const uint8_t *ids = snooker ? ids_snk : ids_pool;
-    int n = 4, gap = rad * 2 + 4;
+    int n = 5, gap = rad * 2 + 4;
     for (int i = 0; i < n; i++)
         draw_ball_icon(fb, cx + (int)((i - (n - 1) * 0.5f) * gap), cy, rad, ids[i], 1);
     s_ball_set = sb; s_is_snooker = ss;
