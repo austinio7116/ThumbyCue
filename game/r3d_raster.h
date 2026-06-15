@@ -20,9 +20,6 @@
 #include "cue_types.h"
 
 void r3d_raster_set_fb(uint16_t *fb);
-
-/* Toggle depth WRITE for r3d_tri (depth test still applies when off). */
-void r3d_set_depth_write(int on);
 void r3d_depth_clear(int y_min, int y_max);
 
 /* Direct depth-buffer access for renderers with their own pixel loops
@@ -38,6 +35,13 @@ void r3d_tri(float ax, float ay, uint16_t az,
              float bx, float by, uint16_t bz,
              float cx, float cy, uint16_t cz,
              uint16_t color, int y_min, int y_max);
+
+/* Same, but depth-TESTED only (no depth write) — for the pocket lips, so they're
+ * occluded by cushions yet covered by balls. Dual-core safe (no shared flag). */
+void r3d_tri_nowrite(float ax, float ay, uint16_t az,
+                     float bx, float by, uint16_t bz,
+                     float cx, float cy, uint16_t cz,
+                     uint16_t color, int y_min, int y_max);
 
 /* Depth-TESTED (but not depth-writing) primitives for particles/beams —
  * drawn after the triangle pass so ships correctly occlude them. */

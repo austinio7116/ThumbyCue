@@ -26,11 +26,6 @@ void r3d_raster_set_fb(uint16_t *fb) {
 
 uint16_t *r3d_depth_buffer(void) { return s_depth; }
 
-/* When 0, r3d_tri still depth-TESTS but does not WRITE depth — used for the
- * pocket lips so cushions occlude them yet balls always draw over them. */
-static int s_depth_write = 1;
-void r3d_set_depth_write(int on) { s_depth_write = on; }
-
 void r3d_depth_clear(int y_min, int y_max) {
     if (y_min < 0) y_min = 0;
     if (y_max > R3D_FB_H) y_max = R3D_FB_H;
@@ -110,10 +105,13 @@ void r3d_line(float x0, float y0, uint16_t d0,
     }
 }
 
-void r3d_tri(float ax, float ay, uint16_t az,
+/* `write` is passed by value (NOT a shared global) so the two cores can raster
+ * concurrently — one drawing depth-writing geometry while the other draws the
+ * no-write lips — without racing on a global depth-write flag. */
+static void tri_raster(float ax, float ay, uint16_t az,
              float bx, float by, uint16_t bz,
              float cx, float cy, uint16_t cz,
-             uint16_t color, int y_min, int y_max) {
+             uint16_t color, int y_min, int y_max, int write) {
     /* Signed area*2. Screen-clockwise => positive. <=0 is backfacing or
      * degenerate — cull. (Winding is consistent because the pipe preserves
      * mesh winding and mirrors it on projection.) */
@@ -159,7 +157,7 @@ void r3d_tri(float ax, float ay, uint16_t az,
             if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
                 uint16_t d = (uint16_t)z;
                 if (d > dp_row[px]) {
-                    if (s_depth_write) dp_row[px] = d;
+                    if (write) dp_row[px] = d;
                     fb_row[px] = color;
                 }
             }
@@ -167,4 +165,15 @@ void r3d_tri(float ax, float ay, uint16_t az,
         }
         w0_row += w0_dy; w1_row += w1_dy; w2_row += w2_dy; z_row += z_dy;
     }
+}
+
+void r3d_tri(float ax, float ay, uint16_t az, float bx, float by, uint16_t bz,
+             float cx, float cy, uint16_t cz, uint16_t color, int y_min, int y_max) {
+    tri_raster(ax,ay,az, bx,by,bz, cx,cy,cz, color, y_min, y_max, 1);   /* writes depth */
+}
+/* Depth-TESTED but NOT depth-writing (pocket lips): cushions occlude them, yet
+ * the balls drawn afterwards always cover them. */
+void r3d_tri_nowrite(float ax, float ay, uint16_t az, float bx, float by, uint16_t bz,
+                     float cx, float cy, uint16_t cz, uint16_t color, int y_min, int y_max) {
+    tri_raster(ax,ay,az, bx,by,bz, cx,cy,cz, color, y_min, y_max, 0);
 }

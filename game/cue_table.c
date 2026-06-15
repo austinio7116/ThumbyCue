@@ -53,7 +53,7 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->gap_corner = 3.20f * t->R; t->gap_side = 2.95f * t->R;   /* corners opened a touch */
         t->facing_len = 1.55f * t->R;
         t->ang_corner = 45.0f; t->ang_side = 70.0f;
-        t->off_corner = 0.42f * t->R; t->off_side = 1.20f * t->R;
+        t->off_corner = 1.30f * t->R; t->off_side = 1.20f * t->R;  /* corners set back into the pocket */
         t->jaw_r = 0.004f;
         t->cloth = RGB565C(18, 110, 120);    /* US tables often tournament blue-green */
         t->rail = RGB565C(70, 46, 30); t->rail_top = RGB565C(100, 66, 42);
@@ -78,7 +78,7 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
          * < the deepened cushion depth, so without this the bore circle never
          * reaches the wood and no cutaway is cut (the fall is realistically set
          * back behind the mouth anyway). */
-        t->off_corner = 1.40f * t->R; t->off_side = 1.00f * t->R;
+        t->off_corner = 1.30f * t->R; t->off_side = 1.00f * t->R;  /* corners back, but not too far */
         t->jaw_r = 0.012f;
         t->baulk_x = -t->half_len + 0.737f * sc;
         t->d_radius = 0.292f * sc;
@@ -265,7 +265,7 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
     const float d = 0.70710678f, oc = t->off_corner, os = t->off_side;
     /* Drop-capture radius (independent of the visible mouth/pr_side). UK8 pub
      * tables have notoriously tight side pockets, so shrink their side capture. */
-    float side_m = (t->kind == CUE_GAME_UK8) ? 0.60f : 0.30f;
+    float side_m = (t->kind == CUE_GAME_UK8) ? 0.15f : 0.30f;  /* UK middle drop ~ corner size */
     float capc = t->pr_corner - 0.3f * t->R, caps = t->pr_side - side_m * t->R;
     add_pocket(w, -hl - oc*d, -hw - oc*d, capc);
     add_pocket(w,  hl + oc*d, -hw - oc*d, capc);

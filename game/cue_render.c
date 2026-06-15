@@ -172,7 +172,7 @@ static void emit_pocket_lips(const CueTable *t, const CueWorld *w) {
     int nb = w->njaw;
     for (int i = 0; i < nb; i++) {
         if (!(i & 1)) continue;                 /* only pocket-mouth edges */
-        /* same corner-only push as the bed, so the lip's outer edge meets the
+        /* same corner-only push as the bed so the lip's outer edge meets the
          * felt and covers the new corner baize */
         float cw = t->rail_w * 0.63f;
         Vec3 a = jaw_pushed(w, t->pr_corner, cw, w->jaw[i]);
@@ -411,9 +411,8 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * and the pocket MOUTHS are real gaps (the angled jaws stay visible). */
     int nb = w->njaw;
     for (int i = 0; i < nb; i++) {
-        /* Run the felt boundary out under the cushions, but ONLY near the corner
-         * pockets (jaw_pushed fades to zero elsewhere) so the middle pockets are
-         * untouched and the corners get felt framing them. */
+        /* Run the felt boundary out under the cushions near the corner pockets
+         * (jaw_pushed fades to zero elsewhere) so the corners get felt framing them. */
         Vec3 a = jaw_pushed(w, t->pr_corner, cw, w->jaw[i]);
         Vec3 b = jaw_pushed(w, t->pr_corner, cw, w->jaw[(i + 1) % nb]);
         /* Edges within a chain (i even) are the straight nose; edges ACROSS a
@@ -470,22 +469,20 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             if (v3_len2(v3_sub(sg->b, nx->a)) < 1e-8f) { nb = v3_norm(v3_add(sg->n, nx->n)); sharedB = 1; }
         }
         /* Pocket facing: extend the free-tip NOSE along its own (mitre/tangent)
-         * direction — CONTINUING THE SAME ANGLE — into the wood frame, to the
-         * cushion's full depth plus a small margin so it tucks under the raised
-         * wood lip. Works for both straight (US) and curved (UK/snooker) jaws:
-         * the tip carries on at its angle instead of turning back on itself. */
+         * direction — CONTINUING THE SAME ANGLE — to STOP exactly at the frame
+         * line (the wood inner edge ±(hw|hl)+cw), NOT past it. Overshooting
+         * tucked the cushion under the raised wood and z-fought on device. */
         if (sg->kind == 1 && (!sharedA || !sharedB)) {
-            const float margin = 0.55f * cw;
             int afree = !sharedA;
             Vec3 kn = afree ? sg->b : sg->a;     /* shared knuckle (toward the rail) */
             Vec3 tp = afree ? sg->a : sg->b;     /* free tip (at the pocket mouth) */
             Vec3 M = v3_norm(v3_sub(tp, kn));    /* the facing's own direction */
             float t = 0.0f;
             if (hw - fabsf(kn.z) < hl - fabsf(kn.x)) {   /* knuckle on a z-rail */
-                float target = (kn.z > 0 ? hw + cw + margin : -(hw + cw + margin));
+                float target = (kn.z > 0 ? hw + cw : -(hw + cw));
                 if (fabsf(M.z) > 1e-4f) t = (target - tp.z) / M.z;
             } else {                                     /* knuckle on an x-rail */
-                float target = (kn.x > 0 ? hl + cw + margin : -(hl + cw + margin));
+                float target = (kn.x > 0 ? hl + cw : -(hl + cw));
                 if (fabsf(M.x) > 1e-4f) t = (target - tp.x) / M.x;
             }
             if (t > 0.0f) { Vec3 e = v3_add(tp, v3_scale(M, t)); if (afree) pa = e; else pb = e; }
@@ -1063,14 +1060,15 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
                 t->x2, t->y2, t->d2, t->color, y0, y1);
     }
     /* Pocket drop lips: depth-TESTED (cushions/wood occlude them) but NOT
-     * depth-WRITING, so the balls drawn afterwards always cover them. */
-    r3d_set_depth_write(0);
+     * depth-WRITING, so the balls drawn afterwards always cover them. Uses the
+     * no-write triangle (per-call flag, NOT a shared global) so the two cores
+     * can raster concurrently — one core's lip pass no longer stops the other
+     * core writing depth for the frame/cushions (that was the device flicker). */
     for (int i = s_lip_nstri; i < s_nstri; i++) {
         const STri *t = &s_stri[i];
-        r3d_tri(t->x0, t->y0, t->d0, t->x1, t->y1, t->d1,
-                t->x2, t->y2, t->d2, t->color, y0, y1);
+        r3d_tri_nowrite(t->x0, t->y0, t->d0, t->x1, t->y1, t->d1,
+                        t->x2, t->y2, t->d2, t->color, y0, y1);
     }
-    r3d_set_depth_write(1);
 
     /* aim dots (cue path, pale yellow) + object-ball path (cyan) */
     for (int i = 0; i < s_ndot; i++)
