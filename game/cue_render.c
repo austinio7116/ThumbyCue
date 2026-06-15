@@ -219,7 +219,7 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
     s_bg_bot = RGB565C(6, 7, 12);
     const float hl = t->half_len, hw = t->half_wid;
     const float rw = t->rail_w;
-    const float cw = rw * 0.42f;        /* cushion depth (nose → cushion back) */
+    const float cw = rw * 0.63f;        /* cushion depth (nose → cushion back); +50% for a beefier rail */
     const float nose_h = t->cushion_h;  /* contact height */
     const float rail_h = t->cushion_h * 1.75f;
     uint16_t wood = t->rail, woodt = t->rail_top;
@@ -300,11 +300,12 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
 
     /* Wood rail frame: full rectangular ring (the pocket caps punch holes
      * through it, flush with the rail). */
-    const float fw = rw + 0.030f;
+    const float fw = rw + 0.055f;       /* wider wood frame to balance the deeper cushions */
     const float ox = hl + fw, oz = hw + fw;
     const float ibx = hl + cw, ibz = hw + cw;
-    /* Long rails carry the side pockets — cut a real hole for each so no wood
-     * shows inside the void (matches the void radius; the void stays small). */
+    /* Solid wood rail top (the pocket collars below cut round recesses into it,
+     * flush at rail level — same footprint as the old black caps but wood). The
+     * long rails still cut a real hole for the side pockets. */
     const float scz = hw + t->off_side, shr = t->pr_side;
     wood_band(-ox, ox, ibz, oz, 0.0f,  scz, shr, rail_h, woodt);
     wood_band(-ox, ox, -oz, -ibz, 0.0f, -scz, shr, rail_h, woodt);
@@ -320,17 +321,17 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
      * pocket (the half sitting over the wood frame) gets a flush rail-level cap
      * + a frame-thickness wall to punch the hole through the wood; the inward
      * (mouth) half is left open so nothing floats above the playing surface. */
-    uint16_t pk_wall = RGB565C(9, 11, 11);
+    uint16_t wood_rim = shade565(woodt, 0.72f);     /* pocket back rim collar (shaded wood) */
     /* Snooker: a deeper, dark-olive "net bag" pouch the potted ball drops into.
      * Pool: a shallow near-black void. */
     uint16_t pk_floor = s_is_snooker ? RGB565C(34, 30, 20) : RGB565C(3, 4, 4);
     uint16_t pk_net   = s_is_snooker ? RGB565C(22, 20, 13) : RGB565C(6, 7, 7);
-    const float cap_y = rail_h + 0.002f;
     const float floor_y = s_is_snooker ? -0.105f : -0.055f;
+    const float cap_y   = rail_h + 0.002f;
     for (int p = 0; p < w->npocket; p++) {
         float cx = w->pocket[p].x, cz = w->pocket[p].z;
         float r = (p < 4) ? t->pr_corner : t->pr_side;
-        Vec3 cap_c = v3(cx, cap_y, cz), floor_c = v3(cx, floor_y, cz);
+        Vec3 floor_c = v3(cx, floor_y, cz);
         const int N = 20;
         /* Align the cone segments to the pocket's outward diagonal so its
          * coverage is symmetric about that axis — otherwise it bites the two
@@ -347,20 +348,26 @@ void cue_render_build_table(const CueTable *t, const CueWorld *w) {
             int over_frame = (fabsf(mx) > ibx - cm || fabsf(mz) > ibz - cm);
             Vec3 bed0 = v3(cx + r*c0, -0.002f, cz + r*s0);
             Vec3 bed1 = v3(cx + r*c1, -0.002f, cz + r*s1);
-            if (s_is_snooker) {                              /* two-tone net pouch */
+            if (over_frame) {
+                /* The pocket BACK (over the wood): same fan footprint as the old
+                 * black cap (rim radius r at rail level, fanning to the centre),
+                 * but a wood rim collar funnelling down to the dark throat — real
+                 * geometry, a recessed round hole instead of a flat black disc. */
+                float ir = 0.58f * r;
+                Vec3 rim0 = v3(cx + r*c0, cap_y, cz + r*s0);
+                Vec3 rim1 = v3(cx + r*c1, cap_y, cz + r*s1);
+                Vec3 in0  = v3(cx + ir*c0, cap_y - 0.014f, cz + ir*s0);
+                Vec3 in1  = v3(cx + ir*c1, cap_y - 0.014f, cz + ir*s1);
+                quad(rim0, rim1, in1, in0, wood_rim);        /* wood rim, sloped in */
+                tri(floor_c, in0, in1, pk_floor);            /* dark funnel to the floor */
+            } else if (s_is_snooker) {                       /* two-tone net pouch (mouth) */
                 float midy = -0.05f, midr = r * 0.62f;
                 Vec3 m0 = v3(cx+midr*c0, midy, cz+midr*s0);
                 Vec3 m1 = v3(cx+midr*c1, midy, cz+midr*s1);
                 quad(bed0, bed1, m1, m0, pk_floor);          /* upper throat */
                 tri(floor_c, m0, m1, pk_net);                /* taper into the bag */
             } else {
-                tri(floor_c, bed0, bed1, pk_floor);          /* shallow dark void */
-            }
-            if (over_frame) {
-                Vec3 top0 = v3(cx + r*c0, cap_y, cz + r*s0);
-                Vec3 top1 = v3(cx + r*c1, cap_y, cz + r*s1);
-                tri(cap_c, top0, top1, pk_wall);             /* punch frame (flush) */
-                quad(top0, top1, bed1, bed0, pk_wall);       /* frame-thickness wall */
+                tri(floor_c, bed0, bed1, pk_floor);          /* shallow dark void (mouth) */
             }
         }
     }

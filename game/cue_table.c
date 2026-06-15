@@ -246,7 +246,10 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
     /* Pocket circles: centre offset just beyond the boundary; drop-capture
      * when the ball centre is within (radius − 0.3R), matching the 2D game. */
     const float d = 0.70710678f, oc = t->off_corner, os = t->off_side;
-    float capc = t->pr_corner - 0.3f * t->R, caps = t->pr_side - 0.3f * t->R;
+    /* Drop-capture radius (independent of the visible mouth/pr_side). UK8 pub
+     * tables have notoriously tight side pockets, so shrink their side capture. */
+    float side_m = (t->kind == CUE_GAME_UK8) ? 0.60f : 0.30f;
+    float capc = t->pr_corner - 0.3f * t->R, caps = t->pr_side - side_m * t->R;
     add_pocket(w, -hl - oc*d, -hw - oc*d, capc);
     add_pocket(w,  hl + oc*d, -hw - oc*d, capc);
     add_pocket(w,  hl + oc*d,  hw + oc*d, capc);
