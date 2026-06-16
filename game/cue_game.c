@@ -827,11 +827,20 @@ void cue_game_draw_overlay(uint16_t *fb) {
             cue_render_group_icon(fb, icx, 6, 5, s_rules.group[s_rules.turn]);
             if (turn0) lx = 16; else rx = 112;
         } else if (nine) {
-            int lo = 0;
+            /* the on-ball (lowest) up top, then the rest of the run to pot in
+             * ascending order as smaller balls down the side. */
+            int ids[9], nb = 0;
             for (int i = 0; i < s_n; i++)
-                if (s_balls[i].on && s_balls[i].id >= 1 && s_balls[i].id <= 9
-                    && (lo == 0 || s_balls[i].id < lo)) lo = s_balls[i].id;
-            if (lo) { cue_render_ball_icon(fb, icx, 6, 5, lo); if (turn0) lx = 16; else rx = 112; }
+                if (s_balls[i].on && s_balls[i].id >= 1 && s_balls[i].id <= 9) ids[nb++] = s_balls[i].id;
+            for (int a = 0; a < nb; a++) for (int b2 = a+1; b2 < nb; b2++)
+                if (ids[b2] < ids[a]) { int t = ids[a]; ids[a] = ids[b2]; ids[b2] = t; }
+            if (nb > 0) {
+                cue_render_ball_icon(fb, icx, 6, 5, ids[0]);          /* ball on (always) */
+                if (s_freelook)                                       /* full run only in free-look */
+                    for (int k = 1, yy = 19; k < nb && yy <= 92; k++, yy += 10)
+                        cue_render_ball_icon(fb, icx, yy, 4, ids[k]);
+                if (turn0) lx = 16; else rx = 112;
+            }
         } else if (snk) {
             cue_render_onball_icon(fb, icx, 6, 5, s_rules.target, s_rules.seq);
             if (turn0) lx = 16; else rx = 112;
@@ -888,9 +897,6 @@ void cue_game_draw_overlay(uint16_t *fb) {
         else if (s_state == GS_AIM) center(fb, "LB LOOK", 119, RGB565C(120,150,120));
         else if (s_state == GS_SHOOTING) center(fb, s_freeview ? "FREEVIEW" : "A FREEVIEW", 119, RGB565C(150,200,150));
         else if (s_msg_t > 0 && s_rules.msg[0]) center(fb, s_rules.msg, 30, RGB565C(255,230,140));
-        int fps=(s_frame_ms>0.1f)?(int)(1000.0f/s_frame_ms+0.5f):0; if(fps>999)fps=999;
-        snprintf(buf,sizeof buf,"%dF", fps);
-        rtext(fb, buf, 125, 24, RGB565C(110,120,130));   /* just below the score band */
         break; }
     }
 }

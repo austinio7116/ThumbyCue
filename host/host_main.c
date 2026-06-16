@@ -93,6 +93,12 @@ int main(int argc, char **argv) {
             printf("autoplay %d shots ok\n", shots);
         }
         for (int i = 0; i < 30; i++) { cue_game_tick(&b, 1.0f / 60.0f); }
+        if (getenv("CUE_FREELOOK")) {               /* confirm placement (A) then free-look (LB) */
+            b.a = 1; cue_game_tick(&b, 1.0f/60.0f); b.a = 0;
+            for (int i = 0; i < 3; i++) cue_game_tick(&b, 1.0f/60.0f);
+            b.lb = 1; cue_game_tick(&b, 1.0f/60.0f); b.lb = 0;
+            for (int i = 0; i < 3; i++) cue_game_tick(&b, 1.0f/60.0f);
+        }
         if (getenv("CUE_NOHUD")) {                  /* clean scene, no HUD — for icons */
             cue_game_render_begin();
             cue_game_render(g_fb, 0, CUE_FB_H);
