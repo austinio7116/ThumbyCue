@@ -98,6 +98,11 @@ void cue_world_defaults(CueWorld *w, float R, float mass);
 void cue_phys_strike(const CueWorld *w, CueBall *b, Vec3 dir, float speed,
                      float tip_side, float tip_vert);
 
+/* As above, with cue elevation `elev` (radians above horizontal — butt raised,
+ * cueing down on the ball). Side spin + elevation curves the path (swerve). */
+void cue_phys_strike_elev(const CueWorld *w, CueBall *b, Vec3 dir, float speed,
+                          float tip_side, float tip_vert, float elev);
+
 /* Advance the simulation by dt seconds. Returns 1 while any ball is still
  * moving, 0 once the table has settled. `events` (optional) receives a
  * bitwise OR of CUE_EV_* for sound/feedback this call. */

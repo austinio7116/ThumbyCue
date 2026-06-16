@@ -166,6 +166,7 @@ static int snk_on(const CueRules *r, int id) {
 
 static void resolve_snooker(CueRules *r, CueBall *b, int n, int first_hit,
                             int scratch, const int *potted, int np) {
+    r->break_shot = 0;            /* the opening break is over once it's resolved */
     int target_before = r->target;
     /* Reds remaining = what's actually on the table (post-shot). Tracking a
      * counter drifted when a red was potted on a foul: it was removed from the

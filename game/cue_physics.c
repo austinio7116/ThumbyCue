@@ -42,27 +42,36 @@ void cue_world_defaults(CueWorld *w, float R, float mass) {
     w->_acc = 0.0f;
 }
 
-void cue_phys_strike(const CueWorld *w, CueBall *b, Vec3 dir, float speed,
-                     float tip_side, float tip_vert) {
+void cue_phys_strike_elev(const CueWorld *w, CueBall *b, Vec3 dir, float speed,
+                          float tip_side, float tip_vert, float elev) {
     dir.y = 0.0f;
     dir = v3_norm(dir);
-    b->vel = v3_scale(dir, speed);
-    b->vel.y = 0.0f;
-
-    /* Tip contact point on the cue ball relative to centre, in the cue frame:
-     * forward = dir, up = +Y, right = up × forward. The tip strikes at
-     * r = right*tip_side*R + up*tip_vert*R (offsets are fractions of R).
-     * A horizontal impulse J = m*vel applied at r produces angular velocity
-     * w = (r × J) / I, I = 2/5 m R^2. This is the textbook relation between
-     * tip offset and the resulting top/back/side spin. */
     Vec3 fwd = dir;
     Vec3 up  = v3(0, 1, 0);
     Vec3 right = v3_norm(v3_cross(up, fwd));   /* points to the shooter's right of the aim */
+
+    /* The cue is elevated `elev` rad above horizontal (butt raised → striking
+     * DOWN on the ball). The impulse runs along the cue: forward·cos − up·sin.
+     * Only the horizontal part drives the ball across the cloth (it can't go
+     * down — planar), so travel speed scales with cos(elev). The impulse is
+     * applied at the tip contact point r, and the DOWN component acting at a
+     * SIDE offset produces spin about the travel axis — which the cloth friction
+     * then turns into a curving path (swerve / masse). */
+    float ce = cosf(elev), se = sinf(elev);
+    Vec3 cdir = v3(fwd.x * ce, -se, fwd.z * ce);     /* cue direction, 3-D */
+    b->vel = v3_scale(fwd, speed * ce);
+    b->vel.y = 0.0f;
+
     Vec3 r = v3_add(v3_scale(right, tip_side * w->R),
                     v3_scale(up,    tip_vert * w->R));
-    Vec3 J = v3_scale(b->vel, w->mass);        /* impulse along the cue */
+    Vec3 J = v3_scale(cdir, speed * w->mass);        /* impulse along the cue */
     float I = 0.4f * w->mass * w->R * w->R;
     b->w = v3_scale(v3_cross(r, J), 1.0f / I);
+}
+
+void cue_phys_strike(const CueWorld *w, CueBall *b, Vec3 dir, float speed,
+                     float tip_side, float tip_vert) {
+    cue_phys_strike_elev(w, b, dir, speed, tip_side, tip_vert, 0.0f);
 }
 
 /* ---- per-ball cloth-contact evolution for one substep ------------------ */

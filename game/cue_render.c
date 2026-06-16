@@ -41,7 +41,8 @@ static int s_nshadow;
 #define MAX_DOTS 48
 static struct { float x, y; uint16_t d; } s_dot[MAX_DOTS]; static int s_ndot;
 static struct { float x, y; uint16_t d; } s_odot[MAX_DOTS]; static int s_nodot;
-static struct { float x0,y0,x1,y1; uint16_t color; int on; } s_cue;
+static struct { float tx,ty,bx,by; uint16_t color; int on; } s_cue;
+static float s_cue_side, s_cue_vert, s_cue_elev;   /* tip offset + elevation for the stick */
 static struct { float cx, cy, rad; uint16_t d; int on; } s_ghost;
 
 /* View globals used by the per-pixel pass. */
@@ -77,6 +78,9 @@ static inline uint16_t mix565(uint16_t a, uint16_t b, float t) {
 /* Ball lighting style (0=smooth/current, 1=hard spec, 2=toon, 3=gloss). */
 static int s_light_mode = 1;
 void cue_render_set_light_mode(int m) { s_light_mode = m; }
+void cue_render_set_cue_tip(float side, float vert, float elev) {
+    s_cue_side = side; s_cue_vert = vert; s_cue_elev = elev;
+}
 
 int cue_render_project(Vec3 world, float *sx, float *sy, uint16_t *d) {
     Vec3 rel = v3_sub(world, s_view.pos);
@@ -747,15 +751,32 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
                 }
             }
         }
-        /* cue stick: behind the ball, pulled back by power. */
-        float gap = 0.015f + power * 0.18f;
-        Vec3 tip = v3(cuepos.x - dir.x * gap, s_ballR, cuepos.z - dir.z * gap);
-        Vec3 butt = v3(tip.x - dir.x * 0.55f, s_ballR, tip.z - dir.z * 0.55f);
-        float tx, ty, bx2, by2; uint16_t td, bd;
-        if (cue_render_project(tip, &tx, &ty, &td) &&
-            cue_render_project(butt, &bx2, &by2, &bd)) {
-            s_cue.x0 = tx; s_cue.y0 = ty; s_cue.x1 = bx2; s_cue.y1 = by2;
-            s_cue.color = RGB565C(210, 180, 110); s_cue.on = 1;
+        /* Cue stick: rests at the tip-contact point on the ball (so it shifts
+         * with the chosen english) and runs back along the ELEVATED cue axis
+         * (butt raised by s_cue_elev → the swerve/masse address). */
+        Vec3 up = v3(0,1,0);
+        Vec3 rightv = v3_norm(v3_cross(up, dir));
+        float ce = cosf(s_cue_elev), se = sinf(s_cue_elev);
+        Vec3 cdir = v3(dir.x*ce, -se, dir.z*ce);          /* into the ball: fwd + down */
+        Vec3 contact = v3(cuepos.x + rightv.x*s_cue_side*s_ballR,
+                          s_ballR     + s_cue_vert*s_ballR,
+                          cuepos.z + rightv.z*s_cue_side*s_ballR);
+        float gap = 0.015f + power * 0.18f;               /* backswing pulls the tip away */
+        Vec3 tip  = v3(contact.x - cdir.x*gap, contact.y - cdir.y*gap, contact.z - cdir.z*gap);
+        Vec3 butt = v3(tip.x - cdir.x*0.55f, tip.y - cdir.y*0.55f, tip.z - cdir.z*0.55f);
+        /* Project with NEAR-PLANE CLIPPING so the cue always renders even when the
+         * butt swings behind the camera (close zoom / steep elevation / angle). */
+        Vec3 vt = m3_mul_v3_t(&s_view.basis, v3_sub(tip,  s_view.pos));
+        Vec3 vb = m3_mul_v3_t(&s_view.basis, v3_sub(butt, s_view.pos));
+        if (vt.z > CUE_NEAR) {                            /* tip in front (it's at the ball) */
+            if (vb.z <= CUE_NEAR) {                       /* clip the butt to the near plane */
+                float t = (CUE_NEAR + 0.002f - vt.z) / (vb.z - vt.z);
+                vb = v3(vt.x + (vb.x-vt.x)*t, vt.y + (vb.y-vt.y)*t, CUE_NEAR + 0.002f);
+            }
+            float it = 1.0f/vt.z, ib = 1.0f/vb.z;
+            s_cue.tx = 64.0f + s_focal*vt.x*it; s_cue.ty = 64.0f - s_focal*vt.y*it;
+            s_cue.bx = 64.0f + s_focal*vb.x*ib; s_cue.by = 64.0f - s_focal*vb.y*ib;
+            s_cue.color = RGB565C(214, 176, 104); s_cue.on = 1;
         }
     }
 }
@@ -1094,13 +1115,36 @@ void cue_render_raster(uint16_t *fb, int y0, int y1) {
     /* balls */
     for (int i = 0; i < s_nspr; i++) draw_ball(fb, depth, &s_spr[i], y0, y1);
 
-    /* cue stick (over the balls for clarity) */
+    /* cue stick (over the balls): a tapered shaded shaft drawn as three FULL-WIDTH
+     * sections along its length — a 1px blue tip, a ~4px ivory ferrule, then the
+     * wood shaft widening to the butt. Each section spans the full cue cross-
+     * section (not a centre line), so the tip cap reads as the end of a cylinder. */
     if (s_cue.on) {
-        r3d_line(s_cue.x0, s_cue.y0, 65000, s_cue.x1, s_cue.y1, 65000,
-                 s_cue.color, y0, y1);
-        /* a second offset line gives it thickness */
-        r3d_line(s_cue.x0, s_cue.y0 + 1, 65000, s_cue.x1, s_cue.y1 + 1, 65000,
-                 shade565(s_cue.color, 0.7f), y0, y1);
+        float dx = s_cue.bx - s_cue.tx, dy = s_cue.by - s_cue.ty;
+        float L = sqrtf(dx*dx + dy*dy);
+        if (L > 1.0f) {
+            float ux = dx/L, uy = dy/L;               /* along */
+            float px = -uy, py = ux;                  /* perpendicular */
+            float wt = 1.4f, wb = 4.3f;               /* half-width: tip → butt */
+            float seg[4] = { 0.0f, 1.0f, 5.0f, L };   /* tip | ferrule | shaft */
+            uint16_t col[3] = { RGB565C(70,90,180), RGB565C(238,234,212), s_cue.color };
+            if (seg[1] > L) seg[1] = L;
+            if (seg[2] > L) seg[2] = L;
+            for (int s = 0; s < 3; s++) {
+                float s0 = seg[s], s1 = seg[s+1]; if (s1 <= s0) continue;
+                float w0 = wt + (wb-wt)*(s0/L), w1 = wt + (wb-wt)*(s1/L);
+                float ax = s_cue.tx+ux*s0, ay = s_cue.ty+uy*s0;
+                float bx2 = s_cue.tx+ux*s1, by2 = s_cue.ty+uy*s1;
+                float aLx=ax+px*w0, aLy=ay+py*w0, aRx=ax-px*w0, aRy=ay-py*w0;
+                float bLx=bx2+px*w1, bLy=by2+py*w1, bRx=bx2-px*w1, bRy=by2-py*w1;
+                r3d_tri(aLx,aLy,65000, aRx,aRy,65000, bRx,bRy,65000, col[s], y0,y1);
+                r3d_tri(aLx,aLy,65000, bRx,bRy,65000, bLx,bLy,65000, col[s], y0,y1);
+            }
+            /* sheen down the wood for a rounded look */
+            float ss = seg[2];
+            r3d_line(s_cue.tx+ux*ss, s_cue.ty+uy*ss, 65000, s_cue.bx, s_cue.by, 65000,
+                     RGB565C(244,214,150), y0,y1);
+        }
     }
 }
 
@@ -1126,15 +1170,45 @@ static void draw_ball_icon(uint16_t *fb, int cx, int cy, int rad, uint8_t id, in
     }
 }
 
-/* HUD group hint: group 1 = low/solids (id 1), 2 = high/stripes (id 9). */
+/* HUD group hint. Pick boldly-distinct reps so the two sides never read the same:
+ * low/solids = a red SOLID (3), high/stripes = a blue STRIPE (10). Avoids the
+ * yellow solid-vs-stripe pair (1 / 9) which was hard to tell apart at icon size.
+ * In UK sets (no stripes) these map to the two group colours anyway. */
 void cue_render_group_icon(uint16_t *fb, int cx, int cy, int rad, int group) {
-    draw_ball_icon(fb, cx, cy, rad, (group == 2) ? 9 : 1, 0);
+    draw_ball_icon(fb, cx, cy, rad, (group == 2) ? 10 : 3, 0);
 }
 
 /* HUD: draw a specific ball id (number circle facing out) with the live set —
  * used to show the 9-ball "ball to pot next". */
 void cue_render_ball_icon(uint16_t *fb, int cx, int cy, int rad, int id) {
     draw_ball_icon(fb, cx, cy, rad, (uint8_t)id, 1);
+}
+
+/* Snooker "ball on" icon: target 0 = a RED ball, 2 = the sequence colour
+ * (value `seq`, 2..7), 1 = "any colour" drawn as a 6-wedge multicolour ball. */
+void cue_render_onball_icon(uint16_t *fb, int cx, int cy, int rad, int target, int seq) {
+    int was = s_is_snooker; s_is_snooker = 1;
+    if (target == 0) { draw_ball_icon(fb, cx, cy, rad, 1, 0); s_is_snooker = was; return; }
+    if (target == 2) { draw_ball_icon(fb, cx, cy, rad, (uint8_t)(18 + seq), 0); s_is_snooker = was; return; }
+    /* any colour → 6 angular wedges of the snooker colours */
+    static const uint16_t cols[6] = {
+        RGB565C(235,200,40), RGB565C(20,130,50), RGB565C(120,70,35),
+        RGB565C(30,80,200), RGB565C(235,120,150), RGB565C(40,40,44) };
+    for (int dy = -rad; dy <= rad; dy++) {
+        int y = cy + dy; if (y < 0 || y >= CUE_FB_H) continue;
+        for (int dx = -rad; dx <= rad; dx++) {
+            int x = cx + dx; if (x < 0 || x >= CUE_FB_W) continue;
+            float u = (float)dx/rad, v = (float)dy/rad;
+            float r2 = u*u + v*v; if (r2 > 1.0f) continue;
+            float nz = sqrtf(1.0f - r2);
+            int w = (int)((atan2f(v, u) + 3.14159265f) * (6.0f / 6.2831853f));
+            if (w < 0) w = 0; if (w > 5) w = 5;
+            float hl = -0.5f*u - 0.5f*v + 0.7f*nz;
+            uint16_t c = (hl > 0.95f) ? RGB565C(255,255,255) : shade565(cols[w], 0.45f + 0.55f*nz);
+            fb[y*CUE_FB_W + x] = c;
+        }
+    }
+    s_is_snooker = was;
 }
 
 /* 3D-shaded cue ball for the spin/aim HUD: a white sphere with a specular

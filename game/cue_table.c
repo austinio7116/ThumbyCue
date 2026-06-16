@@ -19,9 +19,9 @@
 void cue_table_init(CueTable *t, CueGameKind kind) {
     memset(t, 0, sizeof(*t));
     t->kind = kind;
-    t->is_snooker = (kind == CUE_GAME_SNK10 || kind == CUE_GAME_SNK15);
+    t->is_snooker = (kind == CUE_GAME_SNK10 || kind == CUE_GAME_SNK15 || kind == CUE_GAME_SNK6);
 
-    if (kind == CUE_GAME_UK8) {
+    if (kind == CUE_GAME_UK8 || kind == CUE_GAME_SNK6) {
         /* 7 ft UK pub 8-ball: 1.98 × 0.99 m, tight ROUNDED (curved) pockets. */
         t->half_len = 1.98f * 0.5f;
         t->half_wid = 0.99f * 0.5f;
@@ -41,6 +41,18 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->spot = RGB565C(180, 180, 180); t->nballs = 16;
         /* UK 8-ball baulk line + D (white placed in the D after a foul). */
         t->baulk_x = -t->half_len * 0.6f; t->d_radius = t->half_wid * 0.35f;
+        if (kind == CUE_GAME_SNK6) {
+            /* 6-red snooker on the 7 ft UK table: same table geometry and ball
+             * size as UK pool, but snooker balls/rules and snooker spots scaled
+             * onto the small bed. */
+            t->reds = 6;
+            t->cloth = RGB565C(20, 100, 78);            /* snooker green */
+            t->spot = RGB565C(200, 200, 200);
+            t->blue_x  = 0.0f;                          /* centre spot */
+            t->pink_x  = t->half_len * 0.5f;            /* between centre and top */
+            t->black_x = t->half_len - 0.135f;          /* ~scaled from full table */
+            t->nballs  = 13;                            /* cue + 6 reds + 6 colours */
+        }
     } else if (kind == CUE_GAME_US8 || kind == CUE_GAME_US9) {
         /* 9 ft US table: 2.54 × 1.27 m, 2.25" balls, ANGLED straight-mitre
          * pockets (sharp points, more open than UK). */
@@ -284,12 +296,12 @@ void cue_table_build_world(const CueTable *t, CueWorld *w) {
 }
 
 Vec3 cue_table_cue_home(const CueTable *t) {
-    /* Snooker: in the D between the brown (centre) and yellow spots, so it isn't
-     * sitting on top of the brown. UK 8-ball: centre of the D baseline (the spot).
-     * US pool: behind the head string (the "kitchen"). */
-    if (t->is_snooker)            return v3(t->baulk_x, t->R, -t->d_radius * 0.45f);
-    if (t->kind == CUE_GAME_UK8)  return v3(t->baulk_x, t->R, 0.0f);
-    return v3(-t->half_len * 0.5f, t->R, 0.0f);
+    /* All games start OFF the centre line so a break naturally strikes the pack
+     * at an angle (a dead-straight break into the apex splits poorly). Snooker &
+     * UK8 break from one side of the D; US pool from the side of the kitchen. */
+    if (t->is_snooker)            return v3(t->baulk_x, t->R, -t->d_radius * 0.55f);
+    if (t->kind == CUE_GAME_UK8)  return v3(t->baulk_x, t->R, -t->d_radius * 0.55f);
+    return v3(-t->half_len * 0.5f, t->R, t->half_wid * 0.40f);
 }
 
 /* Clamp a desired cue-ball placement to the legal ball-in-hand region:
@@ -392,8 +404,8 @@ static int rack_snooker(const CueTable *t, CueBall *b) {
     set_ball(&b[n++], CUE_ID_BLUE,   t->blue_x, 0.0f, R);
     set_ball(&b[n++], CUE_ID_PINK,   t->pink_x, 0.0f, R);
     set_ball(&b[n++], CUE_ID_BLACK,  t->black_x, 0.0f, R);
-    /* reds triangle: 4 rows (10 reds) or 5 rows (15), apex just behind pink. */
-    int rows = (t->reds <= 10) ? 4 : 5;
+    /* reds triangle: 3 rows (6), 4 rows (10) or 5 rows (15), apex behind pink. */
+    int rows = (t->reds <= 6) ? 3 : (t->reds <= 10) ? 4 : 5;
     float apexx = t->pink_x + 2.0f * R + 0.002f;
     float dx = R * 1.7320508f;
     int red_id = 1;

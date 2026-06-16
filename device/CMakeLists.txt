@@ -35,6 +35,7 @@ add_executable(thumbycue
     ${GAME}/cue_physics.c
     ${GAME}/cue_table.c
     ${GAME}/cue_rules.c
+    ${GAME}/cue_ai.c
     ${GAME}/cue_audio.c
     ${GAME}/r3d_raster.c
     ${GAME}/craft_font.c

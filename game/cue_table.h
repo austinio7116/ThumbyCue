@@ -19,6 +19,7 @@ typedef enum {
     CUE_GAME_US9,       /* 9ft,  angled pockets, US 9-ball */
     CUE_GAME_SNK10,     /* 10ft, curved pockets, 10-red snooker */
     CUE_GAME_SNK15,     /* 12ft, curved pockets, full snooker */
+    CUE_GAME_SNK6,      /* 7ft UK pool table, curved pockets, 6-red snooker */
     CUE_GAME_COUNT
 } CueGameKind;
 /* legacy coarse aliases (kept so existing call sites read cleanly) */

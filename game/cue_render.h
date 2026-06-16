@@ -36,6 +36,12 @@ int cue_render_project(Vec3 world, float *sx, float *sy, uint16_t *d);
 
 /* Ball lighting style: 0 smooth, 1 hard, 2 toon, 3 gloss. */
 void cue_render_set_light_mode(int m);
+/* Cue-tip contact (side/vert as fractions of R) + cue elevation (rad). The cue
+ * stick is drawn resting at this contact point, angled along the elevated cue. */
+void cue_render_set_cue_tip(float side, float vert, float elev);
+/* Snooker "ball on" icon: target 0 = red, 2 = sequence colour (value seq),
+ * 1 = any colour (6-wedge multicolour ball). */
+void cue_render_onball_icon(uint16_t *fb, int cx, int cy, int rad, int target, int seq);
 /* Ball set: 0 PRO, 1 UK yellow/blue, 2 UK yellow/red, 3 dyna, 4 pro-tournament. */
 void cue_render_set_ball_set(int s);
 

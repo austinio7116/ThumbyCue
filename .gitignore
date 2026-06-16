@@ -7,3 +7,6 @@ build_*/
 *.dSYM/
 .DS_Store
 clack_variants/
+
+tempimages/
+*.ppm
