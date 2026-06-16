@@ -9,6 +9,9 @@
 #include "craft_buttons.h"
 
 void cue_game_init(uint32_t seed);
+/* ThumbyOne slot mode: when set, the pause menu's exit item returns to the
+ * lobby (via this callback, which reboots) instead of the standalone main menu. */
+void cue_game_set_lobby_cb(void (*cb)(void));
 void cue_game_set_kind(int snooker);          /* 0 = pool, 1 = snooker */
 void cue_game_set_mode(int mode);             /* CueGameKind 0..4 */
 void cue_game_set_ballset(int s);             /* 0..4 ball appearance */

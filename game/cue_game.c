@@ -104,6 +104,7 @@ static int   s_match_bo = 1;
 static int   s_frames[2];
 static int   s_breaker;           /* 0/1 — who breaks the current frame */
 static int   s_match_over;
+static void (*s_lobby_cb)(void);  /* slot mode: return to ThumbyOne lobby */
 
 static int jp(int cur, int prev) { return cur && !prev; }
 
@@ -207,6 +208,7 @@ void cue_game_init(uint32_t seed) {
     rack();   /* something to show behind the title */
 }
 void cue_game_set_frame_ms(float ms) { s_frame_ms = ms; }
+void cue_game_set_lobby_cb(void (*cb)(void)) { s_lobby_cb = cb; }
 
 /* ---- shot strike + resolve ------------------------------------------- */
 static void begin_shot(void) {
@@ -565,7 +567,10 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
             s_state = GS_PLACE; s_screen = SC_GAME;
         }
         else if (sel == n - 2) { new_frame(); s_screen = SC_GAME; }      /* new frame */
-        else if (sel == n - 1) { s_screen = SC_MAIN; s_cursor = 0; }     /* quit to menu */
+        else if (sel == n - 1) {                                         /* quit / lobby */
+            if (s_lobby_cb) s_lobby_cb();                                /* slot: reboot to lobby */
+            else { s_screen = SC_MAIN; s_cursor = 0; }
+        }
         break; }
     case SC_OVER:
         if (jp(b->a, s_prev.a)) {
@@ -771,10 +776,10 @@ void cue_game_draw_overlay(uint16_t *fb) {
         center(fb, "PAUSED", 18, RGB565C(255,240,200));
         int can_place = s_inhand_avail && !(s_cpu && s_rules.turn == 1);
         if (can_place) {
-            const char *it[4]={"RESUME","PLACE CUE BALL","NEW FRAME","QUIT"};
+            const char *it[4]={"RESUME","PLACE CUE BALL","NEW FRAME", s_lobby_cb?"LOBBY":"QUIT"};
             menu_list(fb, it, 4, s_cursor, 48);
         } else {
-            const char *it[3]={"RESUME","NEW FRAME","QUIT"};
+            const char *it[3]={"RESUME","NEW FRAME", s_lobby_cb?"LOBBY":"QUIT"};
             menu_list(fb, it, 3, s_cursor, 52);
         }
         break; }

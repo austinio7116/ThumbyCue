@@ -19,6 +19,21 @@
 #include "cue_game.h"
 #include "cue_audio.h"
 
+#ifdef THUMBYONE_SLOT_MODE
+#include "ff.h"
+#include "thumbyone_fs.h"
+#include "thumbyone_handoff.h"
+#include "thumbyone_led.h"
+#include "thumbyone_settings.h"
+#include "thumbyone_backlight.h"
+static FATFS g_fs;
+/* Pause-menu "LOBBY" → reboot to the ThumbyOne lobby (no return). */
+static void return_to_lobby(void) {
+    craft_lcd_wait_idle();
+    thumbyone_handoff_request_lobby();
+}
+#endif
+
 static uint16_t g_fb[CUE_FB_W * CUE_FB_H];
 
 static volatile bool s_core1_go = false;
@@ -42,6 +57,16 @@ int main(void) {
     craft_buttons_init();
     craft_rumble_init();
     craft_audio_pwm_init();
+
+#ifdef THUMBYONE_SLOT_MODE
+    /* Honour the lobby's brightness + LED, mount the shared FAT (the lobby owns
+     * mkfs; we only ever get here launched FROM the lobby), then take the
+     * lobby's saved volume and wire the pause-menu return-to-lobby. */
+    thumbyone_slot_init_brightness_and_led(true);
+    (void)thumbyone_fs_mount(&g_fs);
+    cue_audio_set_volume((int)thumbyone_settings_load_volume());
+    cue_game_set_lobby_cb(return_to_lobby);
+#endif
 
     cue_game_init(get_rand_32());
 

@@ -93,7 +93,12 @@ int main(int argc, char **argv) {
             printf("autoplay %d shots ok\n", shots);
         }
         for (int i = 0; i < 30; i++) { cue_game_tick(&b, 1.0f / 60.0f); }
-        render_frame();
+        if (getenv("CUE_NOHUD")) {                  /* clean scene, no HUD — for icons */
+            cue_game_render_begin();
+            cue_game_render(g_fb, 0, CUE_FB_H);
+        } else {
+            render_frame();
+        }
         dump_ppm(shot);
         printf("wrote %s\n", shot);
         return 0;
