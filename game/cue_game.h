@@ -15,6 +15,7 @@ void cue_game_set_lobby_cb(void (*cb)(void));
 void cue_game_set_kind(int snooker);          /* 0 = pool, 1 = snooker */
 void cue_game_set_mode(int mode);             /* CueGameKind 0..4 */
 void cue_game_set_ballset(int s);             /* 0..4 ball appearance */
+void cue_game_set_cloth(int idx);             /* 0..4 felt colour (pool tables) */
 /* Debug: override the camera (eye + look target, fov) for inspection shots. */
 void cue_game_debug_cam(float ex, float ey, float ez,
                         float tx, float ty, float tz, float fov);

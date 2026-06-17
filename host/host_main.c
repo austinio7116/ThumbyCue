@@ -56,6 +56,7 @@ int main(int argc, char **argv) {
     if (getenv("CUE_MODE"))      cue_game_set_mode(atoi(getenv("CUE_MODE")));
     else if (!getenv("CUE_MENU")) cue_game_set_kind(snooker);   /* CUE_MENU: stay on title */
     if (getenv("CUE_BALLSET"))   cue_game_set_ballset(atoi(getenv("CUE_BALLSET")));
+    if (getenv("CUE_CLOTH"))     cue_game_set_cloth(atoi(getenv("CUE_CLOTH")));
 
     const char *shot = getenv("CUE_SHOT");
     if (shot) {

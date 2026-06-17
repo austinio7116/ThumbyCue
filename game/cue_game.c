@@ -794,6 +794,9 @@ void cue_game_debug_cam(float ex,float ey,float ez,float tx,float ty,float tz,fl
     s_dbg=1; s_dbg_eye=v3(ex,ey,ez); s_dbg_tgt=v3(tx,ty,tz); s_dbg_fov=fov;
 }
 void cue_game_set_ballset(int s){ s_ballset = (s<0||s>=CUE_NBALLSET)?0:s; cue_render_set_ball_set(s_ballset); }
+/* Set the felt colour (0..4: GREEN/TEAL/BLUE/CLARET/SLATE) and re-rack so it
+ * applies (pool only — snooker is always green). Debug/screenshot hook. */
+void cue_game_set_cloth(int idx){ s_cloth_idx = (idx<0||idx>=5)?0:idx; rack(); }
 /* Debug: lay balls 1..15 in a 5x3 grid, number patch (+x) facing the camera. */
 void cue_game_debug_numbers(void) {
     s_kind = CUE_GAME_UK8; rack(); memset(s_balls,0,sizeof s_balls);

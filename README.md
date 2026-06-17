@@ -38,6 +38,36 @@ the balls bounce off are guaranteed identical.
 <img src="docs/img/rack.png" width="250" alt="Racked balls close-up">
 </p>
 
+### Ball sets
+
+Every game racks with its own balls — the pool sets (PRO numbered, UK yellow/blue
+and yellow/red, Dynasphere, Pro-Tour) are picked in the PLAY menu:
+
+<p align="center">
+<img src="docs/img/rack-uk8-yb.png"      width="180" alt="UK 8-ball — yellow / blue">
+<img src="docs/img/rack-uk8-yr.png"      width="180" alt="UK 8-ball — yellow / red">
+<img src="docs/img/rack-us8-pro.png"     width="180" alt="US 8-ball — PRO numbered solids & stripes">
+<img src="docs/img/rack-us8-dyna.png"    width="180" alt="US 8-ball — Dynasphere set">
+</p>
+<p align="center">
+<img src="docs/img/rack-us8-protour.png" width="180" alt="US 8-ball — Pro-Tour set">
+<img src="docs/img/rack-9ball.png"       width="180" alt="US 9-ball diamond rack">
+<img src="docs/img/rack-cn8.png"         width="180" alt="Chinese 8-ball on blue cloth">
+<img src="docs/img/rack-snooker.png"     width="180" alt="Snooker — red triangle and colours">
+</p>
+
+### Felt colours
+
+Pool tables can be played on any of five cloths (snooker is always tournament green):
+
+<p align="center">
+<img src="docs/img/felt-green.png"  width="150" alt="Green felt">
+<img src="docs/img/felt-teal.png"   width="150" alt="Teal felt">
+<img src="docs/img/felt-blue.png"   width="150" alt="Blue felt">
+<img src="docs/img/felt-claret.png" width="150" alt="Claret felt">
+<img src="docs/img/felt-slate.png"  width="150" alt="Slate felt">
+</p>
+
 ---
 
 ## Physics

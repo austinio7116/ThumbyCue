@@ -379,17 +379,17 @@ static int rack_pool(const CueTable *t, CueBall *b) {
     const float R = t->R;
     float footx = t->half_len * 0.5f;
     float dx = R * 1.7320508f;
+    /* Fixed arrangement matching 2dpool (RackPatterns.eightBall): 8 in the centre
+     * of row 3, one solid + one stripe in the two back corners. */
     static const int rows[5][5] = {
-        { 1 }, { 9, 2 }, { 10, 8, 3 }, { 11, 4, 12, 5 }, { 6, 13, 7, 14 },
+        { 1 }, { 9, 2 }, { 3, 8, 10 }, { 11, 4, 5, 12 }, { 6, 13, 14, 7, 15 },
     };
-    static const int rown[5] = { 1, 2, 3, 4, 5 };
     int n = 1;
     for (int row = 0; row < 5; row++) {
         float x = footx + row * dx;
-        for (int k = 0; k < rown[row]; k++) {
+        for (int k = 0; k <= row; k++) {
             float z = (-(row) * R) + k * 2.0f * R;
-            int id = (row == 4 && k == 4) ? 15 : rows[row][k];
-            set_ball(&b[n++], id, x, z, R);
+            set_ball(&b[n++], rows[row][k], x, z, R);
         }
     }
     set_ball(&b[0], CUE_ID_CUE, -t->half_len * 0.5f, 0.0f, R);
