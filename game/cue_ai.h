@@ -47,6 +47,8 @@ typedef struct {
     float tip_vert;   /* follow(+)/draw(-), fraction of R */
     int   safe;       /* 1 = this is a safety, not a pot attempt */
     int   valid;      /* 0 = no legal shot found at all (rare) */
+    float score;      /* confidence of the chosen pot (~0..100, higher = easier);
+                       * 0 on a safety. Used by the foul / push-out decision AI. */
 } CueAIShot;
 
 /* Plan a shot for the current table state. `rng` is an xorshift state advanced
@@ -69,5 +71,16 @@ CueAIShot cue_ai_plan_result(void);
 Vec3 cue_ai_place(const CueWorld *w, const CueTable *t, const CueRules *r,
                   const CueBall *balls, int n, const CuePersona *p,
                   int restrict_d, uint32_t *rng);
+
+/* 9-ball push-out shot: deliberately roll the cue ball to a spot that leaves
+ * the opponent the WORST possible shot on the ball-on (no must-hit constraint —
+ * that's the whole point of a push-out). Returns a safety-flagged shot. */
+CueAIShot cue_ai_pushout(const CueWorld *w, const CueTable *t, const CueRules *r,
+                         const CueBall *balls, int n, const CuePersona *p,
+                         uint32_t *rng);
+
+/* Debug: the object-ball aim point the planner would use to pot `target` into
+ * pocket pk (jaw-aware). Exposed for the diagram/diagnostic tools. */
+Vec3 cue_ai_pocket_aim(const CueWorld *w, const CueTable *t, int pk, Vec3 target);
 
 #endif

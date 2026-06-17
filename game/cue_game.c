@@ -22,7 +22,7 @@
 /* Top-level screens. */
 enum { SC_TITLE = 0, SC_MAIN, SC_PLAY, SC_OPTIONS, SC_CUSTOM, SC_GAME, SC_PAUSE, SC_OVER };
 /* In-game sub-states. */
-enum { GS_AIM = 0, GS_BACKSWING, GS_SHOOTING, GS_PLACE };
+enum { GS_AIM = 0, GS_BACKSWING, GS_SHOOTING, GS_PLACE, GS_DECIDE };
 
 /* ---- options / settings ---------------------------------------------- */
 static const uint16_t k_cloth[5] = {
@@ -31,10 +31,11 @@ static const uint16_t k_cloth[5] = {
 };
 static const char *k_cloth_name[5] = { "GREEN","TEAL","BLUE","CLARET","SLATE" };
 
-static int s_kind;            /* CueGameKind: 0 UK8, 1 US8, 2 US9, 3 SNK10, 4 SNK15 */
+static int s_kind;            /* CueGameKind: 0 UK8, 1 US8, 2 US9, 3 CN8, 4 SNK10... */
 static const char *k_mode_name[CUE_GAME_COUNT] = {
-    "UK 8-BALL", "US 8-BALL", "US 9-BALL", "SNOOKER 10", "SNOOKER 15", "SNOOKER 6" };
-static int s_cpu;             /* opponent: 0 = 2 player, 1 = CPU */
+    "UK 8-BALL", "US 8-BALL", "US 9-BALL", "CHINESE 8",
+    "SNOOKER 10", "SNOOKER 15", "SNOOKER 6" };
+static int s_opp_mode = 1;    /* 0 = 2 PLAYER, 1 = VS CPU, 2 = CPU vs CPU */
 static int s_cloth_idx;
 static int s_ballset;          /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna, 4 pro-tour */
 #define CUE_NBALLSET 5
@@ -88,6 +89,8 @@ static int   s_inhand_avail;       /* ball-in-hand not yet used this shot → ca
 static CraftRawButtons s_prev;
 static float s_frame_ms;
 static float s_menu_spin;         /* orbiting backdrop angle */
+static float s_think_spin;        /* camera orbit angle while the CPU is thinking */
+static float s_settle_t = -1.0f;  /* >=0 = CPU camera swooping from orbit to the aim view */
 static int   s_cursor;            /* menu cursor */
 static float s_msg_t;             /* status banner timer */
 
@@ -95,8 +98,12 @@ static float s_msg_t;             /* status banner timer */
 static int   s_first_hit;         /* id of first object ball the cue contacted */
 static uint8_t s_was_on[CUE_MAX_BALLS];
 static int   s_cushion_seen;      /* any cushion contact this shot */
+/* pre-shot snapshot for the snooker foul-and-a-miss "replay" restore */
+static CueBall s_pre_balls[CUE_MAX_BALLS];
+static int   s_pre_target, s_pre_seq, s_pre_reds;
+static int   s_decide_type;       /* GS_DECIDE: 0 push-out offer, 1 push-out response, 2 snooker foul */
 static int   s_cpu_think;         /* CPU pre-shot delay frames */
-static int   s_persona = 2;       /* opponent persona index (default: Hustler Hank) */
+static int   s_persona_p[2] = {2, 2};  /* persona index per player (default Hustler Hank) */
 static uint32_t s_ai_rng = 0x2E8A0005u;  /* AI decision rng */
 static int   s_ai_planning;       /* CPU is mid-plan (thinking indicator) */
 /* Match play: best-of-N frames (1/3/5/7), frames won, current breaker. */
@@ -107,6 +114,66 @@ static int   s_match_over;
 static void (*s_lobby_cb)(void);  /* slot mode: return to ThumbyOne lobby */
 
 static int jp(int cur, int prev) { return cur && !prev; }
+
+/* Opponent model: which players are CPU-controlled, and their persona. */
+static int is_cpu_player(int p) {
+    if (s_opp_mode == 2) return 1;            /* CPU vs CPU: both */
+    if (s_opp_mode == 1) return p == 1;       /* vs CPU: player 1 */
+    return 0;                                 /* 2 player */
+}
+static int cur_is_cpu(void)   { return is_cpu_player(s_rules.turn); }
+static int cur_persona(void)  { return s_persona_p[s_rules.turn & 1]; }
+static int any_cpu(void)      { return s_opp_mode != 0; }
+/* Full / short display names for a player slot given the opponent mode. */
+static const char *player_name(int p) {
+    if (s_opp_mode == 2) return p == 0 ? "CPU 1"    : "CPU 2";
+    if (s_opp_mode == 1) return p == 0 ? "PLAYER 1" : "CPU";
+    return p == 0 ? "PLAYER 1" : "PLAYER 2";
+}
+static const char *player_tag(int p) {
+    if (s_opp_mode == 2) return p == 0 ? "C1"  : "C2";
+    if (s_opp_mode == 1) return p == 0 ? "P1"  : "CPU";
+    return p == 0 ? "P1" : "P2";
+}
+
+/* PLAY-screen rows are dynamic: the persona row(s) only appear for the modes
+ * that have CPU players. Both input and render build the same list so the
+ * cursor maps consistently. */
+enum { ROW_GAME, ROW_MODE, ROW_CPU1, ROW_CPU2, ROW_BALLS, ROW_FRAMES, ROW_START };
+static int play_rows(int *rows) {
+    int n = 0;
+    rows[n++] = ROW_GAME;
+    rows[n++] = ROW_MODE;
+    if (s_opp_mode == 2)      { rows[n++] = ROW_CPU1; rows[n++] = ROW_CPU2; }
+    else if (s_opp_mode == 1) { rows[n++] = ROW_CPU2; }   /* the single CPU is player 1 */
+    rows[n++] = ROW_BALLS;
+    rows[n++] = ROW_FRAMES;
+    rows[n++] = ROW_START;
+    return n;
+}
+
+/* Pause-menu items (dynamic): PLACE only with ball-in-hand; LOBBY only as a
+ * ThumbyOne slot. MENU always quits to ThumbyCue's own main menu. */
+enum { PI_RESUME, PI_PLACE, PI_NEWFRAME, PI_MENU, PI_LOBBY };
+static int pause_items(int *acts) {
+    int n = 0;
+    acts[n++] = PI_RESUME;
+    if (s_inhand_avail && !cur_is_cpu()) acts[n++] = PI_PLACE;
+    acts[n++] = PI_NEWFRAME;
+    acts[n++] = PI_MENU;
+    if (s_lobby_cb) acts[n++] = PI_LOBBY;
+    return n;
+}
+static const char *pause_label(int act) {
+    switch (act) {
+        case PI_RESUME:   return "RESUME";
+        case PI_PLACE:    return "PLACE CUE BALL";
+        case PI_NEWFRAME: return "NEW FRAME";
+        case PI_MENU:     return "QUIT TO MENU";
+        case PI_LOBBY:    return "QUIT TO LOBBY";
+    }
+    return "";
+}
 
 /* ---- table / game setup ---------------------------------------------- */
 static void rack(void) {
@@ -121,7 +188,7 @@ static void new_frame(void) {
     if (!ballset_ok(s_kind, s_ballset))      /* e.g. a grouped set isn't valid for 9-ball */
         s_ballset = default_ballset(s_kind);
     rack();
-    cue_rules_init(&s_rules, &s_table, s_cpu);
+    cue_rules_init(&s_rules, &s_table, any_cpu());
     s_rules.turn = s_breaker;                /* the match decides who breaks */
     /* Break: cue ball in hand — start it on the home spot and let the player
      * place it (in the D for snooker/UK8, behind the head string for US). */
@@ -204,7 +271,8 @@ void cue_game_set_kind(int snooker) { s_kind = snooker ? CUE_GAME_SNK15 : CUE_GA
 void cue_game_set_mode(int mode) { if (mode < 0) mode = 0; if (mode >= CUE_GAME_COUNT) mode = CUE_GAME_COUNT-1; s_kind = mode; new_match(); s_screen = SC_GAME; }
 void cue_game_init(uint32_t seed) {
     cue_audio_init();
-    (void)seed; s_kind = CUE_GAME_UK8; s_cpu = 1; s_screen = SC_TITLE;
+    if (seed) s_ai_rng = seed;          /* honour the entropy seed (device: get_rand_32) */
+    s_kind = CUE_GAME_UK8; s_opp_mode = 1; s_screen = SC_TITLE;
     rack();   /* something to show behind the title */
 }
 void cue_game_set_frame_ms(float ms) { s_frame_ms = ms; }
@@ -213,6 +281,11 @@ void cue_game_set_lobby_cb(void (*cb)(void)) { s_lobby_cb = cb; }
 /* ---- shot strike + resolve ------------------------------------------- */
 static void begin_shot(void) {
     s_inhand_avail = 0;            /* ball-in-hand is used up once the shot is taken */
+    /* Snapshot the layout + whether the striker is snookered, for the snooker
+     * foul-and-a-miss rule (replay from the original position; miss exemption). */
+    for (int i = 0; i < s_n; i++) s_pre_balls[i] = s_balls[i];
+    s_pre_target = s_rules.target; s_pre_seq = s_rules.seq; s_pre_reds = s_rules.reds_left;
+    s_rules.was_snookered = cue_rules_is_snookered(&s_rules, s_balls, s_n);
     Vec3 dir = v3(cosf(s_aim), 0, sinf(s_aim));
     if (!s_balls[0].on) { s_balls[0].pos = cue_table_cue_home(&s_table); s_balls[0].on = 1; }
     float ev = fmaxf(s_elev, min_cue_elev(s_aim));   /* forced up to clear obstacles */
@@ -273,19 +346,153 @@ static void freelook_controls(const CraftRawButtons *b, float dt) {
     }
 }
 
+/* ---- post-shot transition + rule decisions --------------------------- */
+/* Normal end-of-shot state move once any decision has been resolved. */
+static void post_shot_transition(void) {
+    if (s_rules.frame_over) {                 /* award the frame, check the match */
+        if (s_rules.winner == 0 || s_rules.winner == 1) s_frames[s_rules.winner]++;
+        int to_win = s_match_bo / 2 + 1;
+        s_match_over = (s_frames[0] >= to_win || s_frames[1] >= to_win);
+        s_screen = SC_OVER; s_cursor = 0;
+        return;
+    }
+    if (s_rules.ball_in_hand) {
+        s_balls[0].on = 1; s_balls[0].pos = cue_table_cue_home(&s_table);
+        s_balls[0].vel = v3(0,0,0); s_balls[0].w = v3(0,0,0);
+        /* snooker / UK8 always play from the D; US / Chinese 8-ball are in-hand
+         * anywhere on the table after a foul. */
+        s_place_restrict = (s_table.is_snooker || s_kind == CUE_GAME_UK8);
+        s_state = GS_PLACE; s_inhand_avail = 1;
+        return;
+    }
+    s_state = GS_AIM;
+}
+
+/* Restore the pre-shot layout for a snooker "miss" replay-from-original. */
+static void restore_preshot(void) {
+    for (int i = 0; i < s_n; i++) s_balls[i] = s_pre_balls[i];
+    s_rules.target = s_pre_target; s_rules.seq = s_pre_seq; s_rules.reds_left = s_pre_reds;
+}
+
+/* Run the full shot planner for a given player (used by the decision AI to see
+ * what it would actually do if it played on). Restores the live turn after. */
+static CueAIShot plan_for(int player) {
+    int t = s_rules.turn; s_rules.turn = player & 1;
+    CueAIShot s = cue_ai_plan(&s_world, &s_table, &s_rules, s_balls, s_n,
+                              &CUE_PERSONAS[s_persona_p[player & 1]], &s_ai_rng);
+    s_rules.turn = t;
+    return s;
+}
+/* Points still gettable on the snooker table (reds+colours, or the clearance). */
+static int snk_remaining(void) {
+    if (s_rules.reds_left > 0) return s_rules.reds_left * 8 + 27;
+    int rem = 0; for (int v = (s_rules.seq < 2 ? 2 : s_rules.seq); v <= 7; v++) rem += v;
+    return rem;
+}
+
+/* CPU auto-decision for a parked push-out / snooker-foul prompt. Mirrors the
+ * 2dpool ai.js logic: run the planner, compare its confidence to thresholds. */
+static void cpu_decide(void) {
+    if (s_decide_type == 0) {                 /* 9-ball push-out offer */
+        CueAIShot s = plan_for(s_rules.turn);
+        if (!s.safe && s.valid) { s_rules.pushout_offer = 0; s_rules.pushout_avail = 0; } /* good shot → play */
+        else { s_rules.is_pushout = 1; s_rules.pushout_offer = 0; }                       /* none → push out */
+        return;
+    }
+    if (s_decide_type == 1) {                 /* push-out response */
+        CueAIShot s = plan_for(s_rules.turn);
+        if (!s.safe && s.valid) s_rules.pushout_resp = 0;                       /* decent shot → play */
+        else { s_rules.pushout_resp = 0; s_rules.turn = 1 - s_rules.turn; }     /* bad → pass back */
+        return;
+    }
+    /* snooker foul: choose play / replay (put them back) / free ball */
+    int off = s_rules.dec_offender, me = 1 - off;
+    int can_restore = s_rules.dec_can_restore, fb_avail = s_rules.dec_free_ball;
+    int need_snookers = (s_rules.score[off] - s_rules.score[me]) > snk_remaining();
+    int choice;
+    if (s_rules.dec_scratch) {
+        /* cue off-table — no shot to plan. Put them back in if a miss let us;
+         * otherwise take ball-in-hand. */
+        choice = can_restore ? CUE_DEC_REPLAY : CUE_DEC_PLAY;
+    } else {
+        CueAIShot pot = plan_for(me);
+        int hasPot = (!pot.safe && pot.valid);
+        int fbHasPot = 0; float fbS = 0.0f;
+        if (fb_avail) {
+            int sv = s_rules.free_ball; s_rules.free_ball = 1;   /* let the planner use any ball */
+            CueAIShot f = plan_for(me);
+            s_rules.free_ball = sv;
+            fbHasPot = (!f.safe && f.valid); fbS = f.score;
+        }
+        if (can_restore) {
+            /* restore is usually strongest: only pass it up for an excellent shot */
+            if (need_snookers)
+                choice = (fb_avail && fbHasPot && fbS > 70.0f) ? CUE_DEC_FREEBALL : CUE_DEC_REPLAY;
+            else if (fb_avail && fbHasPot && fbS > 75.0f) choice = CUE_DEC_FREEBALL;
+            else if (hasPot && pot.score > 85.0f)         choice = CUE_DEC_PLAY;
+            else                                          choice = CUE_DEC_REPLAY;
+        } else {
+            choice = (fb_avail && fbHasPot) ? CUE_DEC_FREEBALL : CUE_DEC_PLAY;
+        }
+    }
+    if (choice == CUE_DEC_REPLAY) restore_preshot();
+    cue_rules_apply_decision(&s_rules, choice);
+}
+
+/* Route a just-resolved shot: fall straight through, auto-decide for the CPU,
+ * or park in GS_DECIDE for a human choice. */
+static void route_post_shot(void) {
+    int pending = s_rules.pushout_offer ? 0 :
+                  s_rules.pushout_resp  ? 1 :
+                  (s_rules.decision == CUE_DEC_PENDING) ? 2 : -1;
+    if (pending < 0) { post_shot_transition(); return; }
+    /* who chooses: snooker foul → the offender's opponent; push-out prompts →
+     * the player currently at the table. */
+    int chooser = (pending == 2) ? (1 - s_rules.dec_offender) : s_rules.turn;
+    s_decide_type = pending;
+    if (is_cpu_player(chooser)) { cpu_decide(); post_shot_transition(); }
+    else s_state = GS_DECIDE;
+}
+
+/* Human input while a decision prompt is up (GS_DECIDE). */
+static void decide_input(const CraftRawButtons *b) {
+    int a  = jp(b->a,  s_prev.a);
+    int bb = jp(b->b,  s_prev.b);
+    int lb = jp(b->lb, s_prev.lb);
+    if (s_decide_type == 0) {                 /* push-out offer: A = push out, B = play */
+        if (a) { s_rules.is_pushout = 1; s_rules.pushout_offer = 0; cue_audio_sfx(CUE_SFX_UI,0.4f); post_shot_transition(); }
+        else if (bb) { s_rules.pushout_offer = 0; s_rules.pushout_avail = 0; cue_audio_sfx(CUE_SFX_UI,0.3f); post_shot_transition(); }
+    } else if (s_decide_type == 1) {          /* push-out response: A = play, B = pass back */
+        if (a) { s_rules.pushout_resp = 0; cue_audio_sfx(CUE_SFX_UI,0.4f); post_shot_transition(); }
+        else if (bb) { s_rules.pushout_resp = 0; s_rules.turn = 1 - s_rules.turn; cue_audio_sfx(CUE_SFX_UI,0.3f); post_shot_transition(); }
+    } else {                                  /* snooker foul: A = play, B = replay, LB = free ball */
+        if (a) { cue_rules_apply_decision(&s_rules, CUE_DEC_PLAY); cue_audio_sfx(CUE_SFX_UI,0.4f); post_shot_transition(); }
+        else if (bb && s_rules.dec_can_restore) { restore_preshot(); cue_rules_apply_decision(&s_rules, CUE_DEC_REPLAY); cue_audio_sfx(CUE_SFX_UI,0.4f); post_shot_transition(); }
+        else if (lb && s_rules.dec_free_ball) { cue_rules_apply_decision(&s_rules, CUE_DEC_FREEBALL); cue_audio_sfx(CUE_SFX_UI,0.4f); post_shot_transition(); }
+    }
+}
+
 /* ---- in-game tick ---------------------------------------------------- */
 static void ingame_tick(const CraftRawButtons *b, float dt) {
     int jr_a = !b->a && s_prev.a;
     int adir = (b->left && !b->right) ? +1 : (b->right && !b->left) ? -1 : 0;
-    int cpu_turn = (s_cpu && s_rules.turn == 1);
+    int cpu_turn = cur_is_cpu();
 
     /* AI's turn: plan across frames (one sim/frame), and let the player FREE-LOOK
      * to roam the table instead of staring down the CPU's cue. */
     if (cpu_turn && s_state == GS_AIM) {
-        if (s_cpu_think == 0) {           /* kick off the resumable plan */
-            cue_ai_plan_start(&s_world, &s_table, &s_rules, s_balls, s_n,
-                              &CUE_PERSONAS[s_persona], &s_ai_rng);
-            s_ai_planning = 1;
+        if (s_cpu_think == 0) {           /* kick off the plan */
+            s_think_spin = s_view_az;     /* orbit starts from the current view */
+            s_settle_t = -1.0f;
+            if (s_rules.is_pushout) {     /* push-out: deliberate cue placement (synchronous) */
+                cpu_apply(cue_ai_pushout(&s_world, &s_table, &s_rules, s_balls, s_n,
+                                         &CUE_PERSONAS[cur_persona()], &s_ai_rng));
+                s_ai_planning = 0;
+            } else {                      /* normal shot: resumable plan (one sim/frame) */
+                cue_ai_plan_start(&s_world, &s_table, &s_rules, s_balls, s_n,
+                                  &CUE_PERSONAS[cur_persona()], &s_ai_rng);
+                s_ai_planning = 1;
+            }
         }
         if (s_ai_planning && cue_ai_plan_tick()) { cpu_apply(cue_ai_plan_result()); s_ai_planning = 0; }
         s_cpu_think++;
@@ -298,8 +505,12 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
             s_freelook = 1; s_fl_az = s_view_az; s_look = v3(0, s_table.R, 0);
             return;
         }
-        /* shoot once planning is done and a short minimum think has elapsed */
-        if (!s_ai_planning && s_cpu_think > 10) { s_cpu_think = 0; begin_shot(); }
+        /* Still planning, or a short minimum, → keep orbiting the table. */
+        if (s_ai_planning || s_cpu_think < 18) { s_think_spin += dt * 0.8f; return; }
+        /* Plan locked → swoop the camera smoothly+swiftly to the aim line, strike. */
+        if (s_settle_t < 0.0f) s_settle_t = 0.0f;
+        s_settle_t += dt;
+        if (s_settle_t >= 0.40f) { s_settle_t = -1.0f; s_cpu_think = 0; begin_shot(); }
         return;
     }
 
@@ -320,7 +531,7 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
     if (s_state == GS_PLACE) {
         if (cpu_turn) {            /* CPU positions its ball-in-hand, then aims */
             s_balls[0].pos = cue_ai_place(&s_world, &s_table, &s_rules, s_balls, s_n,
-                                          &CUE_PERSONAS[s_persona], s_place_restrict, &s_ai_rng);
+                                          &CUE_PERSONAS[cur_persona()], s_place_restrict, &s_ai_rng);
             s_balls[0].on = 1;
             s_state = GS_AIM;
             return;
@@ -467,21 +678,10 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
                               s_first_hit, cue_scratch, s_cushion_seen, potted, np);
             s_power = 0; s_tip_side = s_tip_vert = 0; s_elev = 0; s_aim = s_view_az;
             s_msg_t = 2.0f;
-            if (s_rules.frame_over) {                 /* award the frame, check the match */
-                if (s_rules.winner == 0 || s_rules.winner == 1) s_frames[s_rules.winner]++;
-                int to_win = s_match_bo / 2 + 1;
-                s_match_over = (s_frames[0] >= to_win || s_frames[1] >= to_win);
-                s_screen = SC_OVER; s_cursor = 0;
-            }
-            else if (s_rules.ball_in_hand) {
-                s_balls[0].on = 1; s_balls[0].pos = cue_table_cue_home(&s_table);
-                s_balls[0].vel = v3(0,0,0); s_balls[0].w = v3(0,0,0);
-                /* snooker / UK8 always play from the D; US 8-ball is in-hand
-                 * anywhere on the table after a foul. */
-                s_place_restrict = (s_table.is_snooker || s_kind == CUE_GAME_UK8);
-                s_state = GS_PLACE; s_inhand_avail = 1;
-            } else s_state = GS_AIM;
+            route_post_shot();
         }
+    } else if (s_state == GS_DECIDE) {
+        decide_input(b);
     }
 }
 
@@ -508,33 +708,37 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         else if (sel == 2) { s_screen = SC_CUSTOM; s_cursor = 0; }
         break; }
     case SC_PLAY: {
-        /* items: GAME, OPPONENT, BALLS, FRAMES, START, (back via B) */
         static const int bo_opts[4] = { 1, 3, 5, 7 };
-        menu_move(b, 5);
-        if (s_cursor == 0 && (jp(b->right,s_prev.right) || jp(b->left,s_prev.left))) {
-            int d = jp(b->right,s_prev.right) ? 1 : (CUE_GAME_COUNT - 1);
-            s_kind = (s_kind + d) % CUE_GAME_COUNT;
-            s_ballset = default_ballset(s_kind);     /* sensible default per game */
+        int rows[7]; int nr = play_rows(rows);
+        if (s_cursor >= nr) s_cursor = nr - 1;
+        menu_move(b, nr);
+        int row = rows[s_cursor];
+        int lr = (jp(b->right,s_prev.right)?1:0) - (jp(b->left,s_prev.left)?1:0);
+        switch (row) {
+        case ROW_GAME:
+            if (lr) { s_kind = (s_kind + (lr>0?1:CUE_GAME_COUNT-1)) % CUE_GAME_COUNT;
+                      s_ballset = default_ballset(s_kind); }
+            break;
+        case ROW_MODE:
+            if (lr) s_opp_mode = (s_opp_mode + (lr>0?1:2)) % 3;
+            break;
+        case ROW_CPU1:
+            if (lr) s_persona_p[0] = (s_persona_p[0] + (lr>0?1:CUE_NUM_PERSONAS-1)) % CUE_NUM_PERSONAS;
+            break;
+        case ROW_CPU2:
+            if (lr) s_persona_p[1] = (s_persona_p[1] + (lr>0?1:CUE_NUM_PERSONAS-1)) % CUE_NUM_PERSONAS;
+            break;
+        case ROW_BALLS:
+            if (lr) s_ballset = next_ballset(s_kind, s_ballset, lr>0?1:-1);
+            break;
+        case ROW_FRAMES:
+            if (lr) { int bi = 0; for (int k=0;k<4;k++) if (bo_opts[k]==s_match_bo) bi=k;
+                      bi = (bi + (lr>0?1:3)) % 4; s_match_bo = bo_opts[bi]; }
+            break;
+        case ROW_START:
+            if (jp(b->a, s_prev.a)) { new_match(); s_screen = SC_GAME; }
+            break;
         }
-        /* VS line cycles: PLAYER 2 → each persona (easiest→hardest) → PLAYER 2 */
-        if (s_cursor == 1 && jp(b->right,s_prev.right)) {
-            if (!s_cpu) { s_cpu = 1; s_persona = 0; }
-            else if (s_persona < CUE_NUM_PERSONAS - 1) s_persona++;
-            else s_cpu = 0;
-        }
-        if (s_cursor == 1 && jp(b->left,s_prev.left)) {
-            if (!s_cpu) { s_cpu = 1; s_persona = CUE_NUM_PERSONAS - 1; }
-            else if (s_persona > 0) s_persona--;
-            else s_cpu = 0;
-        }
-        if (s_cursor == 2 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right)))
-            s_ballset = next_ballset(s_kind, s_ballset, jp(b->right,s_prev.right)?1:-1);
-        if (s_cursor == 3 && (jp(b->left,s_prev.left)||jp(b->right,s_prev.right))) {
-            int bi = 0; for (int k=0;k<4;k++) if (bo_opts[k]==s_match_bo) bi=k;
-            bi = (bi + (jp(b->right,s_prev.right)?1:3)) % 4;
-            s_match_bo = bo_opts[bi];
-        }
-        if (s_cursor == 4 && jp(b->a, s_prev.a)) { new_match(); s_screen = SC_GAME; }
         if (jp(b->b, s_prev.b)) { s_screen = SC_MAIN; s_cursor = 0; }
         break; }
     case SC_OPTIONS: {
@@ -555,21 +759,19 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         else ingame_tick(b, dt);
         break;
     case SC_PAUSE: {
-        /* When the cue ball is still in hand (break or a foul, shot not yet
-         * taken) offer to re-place it — in case of an unwanted placement. */
-        int can_place = s_inhand_avail && !(s_cpu && s_rules.turn == 1);
-        int n = can_place ? 4 : 3;
+        int acts[6]; int n = pause_items(acts);
+        if (s_cursor >= n) s_cursor = n - 1;
         int sel = menu_move(b, n);
-        if (jp(b->menu, s_prev.menu) || jp(b->b,s_prev.b)) s_screen = SC_GAME;
-        else if (sel == 0) s_screen = SC_GAME;                            /* resume */
-        else if (can_place && sel == 1) {                                /* place cue ball */
-            s_balls[0].on = 1; s_balls[0].vel = v3(0,0,0); s_balls[0].w = v3(0,0,0);
-            s_state = GS_PLACE; s_screen = SC_GAME;
-        }
-        else if (sel == n - 2) { new_frame(); s_screen = SC_GAME; }      /* new frame */
-        else if (sel == n - 1) {                                         /* quit / lobby */
-            if (s_lobby_cb) s_lobby_cb();                                /* slot: reboot to lobby */
-            else { s_screen = SC_MAIN; s_cursor = 0; }
+        if (jp(b->menu, s_prev.menu) || jp(b->b,s_prev.b)) { s_screen = SC_GAME; break; }
+        if (sel < 0) break;
+        switch (acts[sel]) {
+            case PI_RESUME: s_screen = SC_GAME; break;
+            case PI_PLACE:                                               /* re-place cue ball */
+                s_balls[0].on = 1; s_balls[0].vel = v3(0,0,0); s_balls[0].w = v3(0,0,0);
+                s_state = GS_PLACE; s_screen = SC_GAME; break;
+            case PI_NEWFRAME: new_frame(); s_screen = SC_GAME; break;
+            case PI_MENU:   s_screen = SC_MAIN; s_cursor = 0; break;     /* ThumbyCue main menu */
+            case PI_LOBBY:  if (s_lobby_cb) s_lobby_cb(); break;         /* slot: reboot to lobby */
         }
         break; }
     case SC_OVER:
@@ -632,6 +834,33 @@ static void build_view(CueView *v) {
         v->pos=cam; v->basis.r[0]=right; v->basis.r[1]=up; v->basis.r[2]=fwd;
         return;
     }
+    /* While the CPU is thinking (incl. the opening break), slowly orbit the whole
+     * table for a broadcast feel; once the shot is locked, swoop smoothly+swiftly
+     * down to the aim line before striking. The player can still LB to free-look. */
+    if (cur_is_cpu() && s_state == GS_AIM && !s_freelook) {
+        float ext = (s_table.half_len > s_table.half_wid) ? s_table.half_len : s_table.half_wid;
+        float d = ext * 1.9f, hgt = ext * 0.9f;
+        Vec3 cam_o  = v3(cosf(s_think_spin) * d, hgt, sinf(s_think_spin) * d);
+        Vec3 look_o = v3(0, s_table.R, 0);               /* frame the table centre */
+        Vec3 cam = cam_o, look = look_o;
+        if (s_settle_t >= 0.0f) {                        /* swoop orbit → aim view */
+            Vec3 P = cue_pos();
+            Vec3 dir = v3(cosf(s_aim), 0, sinf(s_aim));
+            float dist = 0.82f - 0.52f * s_cam_dist_z;
+            float elev = 0.12f + 0.52f * s_cam_pitch;
+            Vec3 cam_a  = v3(P.x - dir.x*dist, s_table.R + elev, P.z - dir.z*dist);
+            Vec3 look_a = v3(P.x + dir.x*0.20f, s_table.R, P.z + dir.z*0.20f);
+            float t = s_settle_t / 0.40f; if (t > 1.0f) t = 1.0f;
+            t = t * t * (3.0f - 2.0f * t);               /* smoothstep */
+            cam  = v3_lerp(cam_o, cam_a, t);
+            look = v3_lerp(look_o, look_a, t);
+        }
+        Vec3 fwd  = v3_norm(v3_sub(look, cam));
+        Vec3 right = v3_norm(v3_cross(v3(0,1,0), fwd)); Vec3 up = v3_cross(fwd, right);
+        v->pos = cam; v->basis.r[0] = right; v->basis.r[1] = up; v->basis.r[2] = fwd;
+        return;
+    }
+
     /* During a shot the camera FOLLOWS the cue ball; tapping A enters freeview,
      * where it orbits the frozen point and the player roams with the controls. */
     Vec3 P = (s_state == GS_SHOOTING && s_freeview) ? s_orbit_c
@@ -672,6 +901,9 @@ void cue_game_render_begin(void) {
     CueView v; build_view(&v);
     Vec3 dir = v3(cosf(s_aim),0,sinf(s_aim));
     int aiming = !s_dbg && !s_freelook && s_screen==SC_GAME && (s_state==GS_AIM || s_state==GS_BACKSWING || s_state==GS_PLACE);
+    /* While the CPU orbits the table thinking, hide the cue (it looks ugly
+     * sweeping around); it reappears as the camera swoops onto the aim line. */
+    if (cur_is_cpu() && s_state == GS_AIM && !s_freelook && s_settle_t < 0.0f) aiming = 0;
     float pw = (s_state==GS_BACKSWING) ? s_power : 0.0f;
     cue_render_set_cue_tip(s_tip_side, s_tip_vert, fmaxf(s_elev, min_cue_elev(s_aim)));
     cue_render_build(&v, s_balls, s_n, aiming, 0, dir, pw, aiming);
@@ -686,12 +918,24 @@ static void rtext(uint16_t *fb, const char *s, int xr, int y, uint16_t c) {
     int w = craft_font_width(s); craft_font_draw(fb, s, xr - w, y, c);
 }
 static void menu_list(uint16_t *fb, const char *const *items, int n, int cursor, int y0) {
+    /* left-aligned action list (cursor caret in the left margin) */
     for (int i = 0; i < n; i++) {
-        int y = y0 + i*10;
+        int y = y0 + i*11;
         uint16_t c = (i==cursor) ? RGB565C(255,240,120) : RGB565C(190,190,200);
-        int w = craft_font_width(items[i]);
-        if (i==cursor) craft_font_draw(fb, ">", 64 - w/2 - 8, y, c);
-        craft_font_draw(fb, items[i], 64 - w/2, y, c);
+        if (i==cursor) craft_font_draw(fb, ">", 30, y, c);
+        craft_font_draw(fb, items[i], 40, y, c);
+    }
+}
+/* A settings row: label hard-left, value hard-right. The selected row gets a
+ * caret + < > arrows around the value to show it's adjustable. */
+static void menu_row(uint16_t *fb, const char *label, const char *value, int y, int sel) {
+    uint16_t lc = sel ? RGB565C(255,240,120) : RGB565C(180,185,195);
+    if (sel) craft_font_draw(fb, ">", 4, y, lc);
+    craft_font_draw(fb, label, 12, y, lc);
+    if (value) {
+        uint16_t vc = sel ? RGB565C(255,255,180) : RGB565C(150,200,230);
+        if (sel) { char vb[28]; snprintf(vb, sizeof vb, "< %s >", value); rtext(fb, vb, 124, y, vc); }
+        else     rtext(fb, value, 124, y, vc);
     }
 }
 static void dim(uint16_t *fb, int amt) {            /* darken whole fb for overlays */
@@ -732,61 +976,64 @@ void cue_game_draw_overlay(uint16_t *fb) {
         break; }
     case SC_PLAY: {
         dim(fb, 8);
-        center(fb, "PLAY", 12, RGB565C(255,240,200));
-        snprintf(buf,sizeof buf,"GAME   < %s >", k_mode_name[s_kind]);
-        const char *it[5]; it[0]=buf;
-        char obuf[28];
-        if (s_cpu) snprintf(obuf,sizeof obuf,"VS  <%s>", CUE_PERSONAS[s_persona].name);
-        else       snprintf(obuf,sizeof obuf,"VS  < PLAYER 2 >");
+        center(fb, "PLAY", 9, RGB565C(255,240,200));
+        int rows[7]; int nr = play_rows(rows);
         int snk = (s_kind >= CUE_GAME_SNK10);   /* derive from menu mode, not stale table */
-        char bbuf[24]; snprintf(bbuf,sizeof bbuf,"BALLS  < %s >",
-            snk ? "SNOOKER" : k_ballset_name[s_ballset]);
-        char fbuf[24];
-        if (s_match_bo == 1) snprintf(fbuf,sizeof fbuf,"FRAMES < SINGLE >");
-        else                 snprintf(fbuf,sizeof fbuf,"FRAMES < BEST OF %d >", s_match_bo);
-        it[1]=obuf; it[2]=bbuf; it[3]=fbuf; it[4]="START";
-        menu_list(fb, it, 5, s_cursor, 34);
-        if (s_cpu) {
-            char ebuf[20]; snprintf(ebuf,sizeof ebuf,"ELO %d", CUE_PERSONAS[s_persona].elo);
-            center(fb, ebuf, 82, RGB565C(150,200,150));
+        int sel_persona = -1, balls_sel = 0;
+        for (int i = 0; i < nr; i++) {
+            int y = 22 + i*10, sel = (i == s_cursor);
+            char vb[24];
+            switch (rows[i]) {
+            case ROW_GAME:  menu_row(fb, "GAME", k_mode_name[s_kind], y, sel); break;
+            case ROW_MODE:  menu_row(fb, "MODE",
+                                s_opp_mode==0?"2 PLAYER":s_opp_mode==1?"VS CPU":"CPU vs CPU", y, sel); break;
+            case ROW_CPU1:  menu_row(fb, "CPU 1", CUE_PERSONAS[s_persona_p[0]].name, y, sel);
+                            if (sel) sel_persona = s_persona_p[0]; break;
+            case ROW_CPU2:  menu_row(fb, s_opp_mode==2?"CPU 2":"CPU", CUE_PERSONAS[s_persona_p[1]].name, y, sel);
+                            if (sel) sel_persona = s_persona_p[1]; break;
+            case ROW_BALLS: menu_row(fb, "BALLS", snk?"SNOOKER":k_ballset_name[s_ballset], y, sel);
+                            balls_sel = sel; break;
+            case ROW_FRAMES:
+                if (s_match_bo == 1) snprintf(vb,sizeof vb,"SINGLE");
+                else                 snprintf(vb,sizeof vb,"BEST OF %d", s_match_bo);
+                menu_row(fb, "FRAMES", vb, y, sel); break;
+            case ROW_START: menu_row(fb, "START", NULL, y, sel); break;
+            }
         }
-        /* live preview of the chosen ball set (or standard snooker balls) */
-        cue_render_set_preview(fb, 64, 100, 7, s_ballset, snk);
-        center(fb, "B BACK", 116, RGB565C(150,150,160));
+        /* context widget below the list: persona ELO, or the ball-set preview */
+        if (sel_persona >= 0) {
+            char ebuf[20]; snprintf(ebuf,sizeof ebuf,"ELO %d", CUE_PERSONAS[sel_persona].elo);
+            center(fb, ebuf, 100, RGB565C(150,200,150));
+        } else if (balls_sel || s_cursor == nr - 1) {
+            cue_render_set_preview(fb, 64, 102, 6, s_ballset, snk);
+        }
+        center(fb, "B BACK", 117, RGB565C(150,150,160));
         break; }
     case SC_OPTIONS: {
         dim(fb, 8);
         center(fb, "OPTIONS", 14, RGB565C(255,240,200));
-        char vbuf[24]; snprintf(vbuf,sizeof vbuf,"VOLUME < %d >", s_vol);
-        char cbuf[24]; snprintf(cbuf,sizeof cbuf,"FELT   < %s >", k_cloth_name[s_cloth_idx]);
-        const char *it[2]={vbuf,cbuf};
-        menu_list(fb, it, 2, s_cursor, 50);
+        char vbuf[8]; snprintf(vbuf,sizeof vbuf,"%d", s_vol);
+        menu_row(fb, "VOLUME", vbuf, 52, s_cursor==0);
+        menu_row(fb, "FELT", k_cloth_name[s_cloth_idx], 63, s_cursor==1);
         center(fb, "B BACK", 116, RGB565C(150,150,160));
         break; }
     case SC_CUSTOM: {
         dim(fb, 8);
         center(fb, "TABLE", 14, RGB565C(255,240,200));
-        char cbuf[24]; snprintf(cbuf,sizeof cbuf,"FELT < %s >", k_cloth_name[s_cloth_idx]);
-        const char *it[1]={cbuf};
-        menu_list(fb, it, 1, s_cursor, 56);
+        menu_row(fb, "FELT", k_cloth_name[s_cloth_idx], 58, s_cursor==0);
         center(fb, "B BACK", 116, RGB565C(150,150,160));
         break; }
     case SC_PAUSE: {
         dim(fb, 7);
         center(fb, "PAUSED", 18, RGB565C(255,240,200));
-        int can_place = s_inhand_avail && !(s_cpu && s_rules.turn == 1);
-        if (can_place) {
-            const char *it[4]={"RESUME","PLACE CUE BALL","NEW FRAME", s_lobby_cb?"LOBBY":"QUIT"};
-            menu_list(fb, it, 4, s_cursor, 48);
-        } else {
-            const char *it[3]={"RESUME","NEW FRAME", s_lobby_cb?"LOBBY":"QUIT"};
-            menu_list(fb, it, 3, s_cursor, 52);
-        }
+        int acts[6]; int n = pause_items(acts);
+        const char *it[6]; for (int i = 0; i < n; i++) it[i] = pause_label(acts[i]);
+        menu_list(fb, it, n, s_cursor, 60 - n*5);
         break; }
     case SC_OVER: {
         dim(fb, 6);
-        const char *wn = s_rules.winner==0 ? "PLAYER 1" : (s_cpu?"CPU":"PLAYER 2");
-        const char *p2 = s_cpu ? "CPU" : "P2";
+        const char *wn = player_name(s_rules.winner == 1 ? 1 : 0);
+        const char *p1 = player_tag(0), *p2 = player_tag(1);
         if (s_match_over && s_match_bo > 1) {
             center(fb, "MATCH OVER", 26, RGB565C(255,240,200));
             snprintf(buf,sizeof buf,"%s WINS THE MATCH", wn);
@@ -801,7 +1048,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
             center(fb, buf, 62, RGB565C(160,200,255));
         }
         if (s_match_bo > 1) {                     /* match frame tally */
-            snprintf(buf,sizeof buf,"P1  %d - %d  %s   (Bo%d)", s_frames[0], s_frames[1], p2, s_match_bo);
+            snprintf(buf,sizeof buf,"%s  %d - %d  %s   (Bo%d)", p1, s_frames[0], s_frames[1], p2, s_match_bo);
             center(fb, buf, 76, RGB565C(255,255,255));
         }
         if (s_match_over) center(fb, "A MENU", 100, RGB565C(180,180,190));
@@ -813,7 +1060,7 @@ void cue_game_draw_overlay(uint16_t *fb) {
         int snk = s_table.is_snooker, nine = (s_rules.mode == CUE_GAME_US9);
         int pool8 = (!snk && !nine);
         band(fb, 0, 12, 13);                                 /* dim only the top line; 2nd row has no bg */
-        const char *p2n = s_cpu ? "CPU" : "P2";
+        const char *p1n = player_tag(0), *p2n = player_tag(1);
         uint16_t act = RGB565C(255,235,90), idle = RGB565C(170,180,190);
         uint16_t c0 = (s_rules.turn==0)?act:idle, c1 = (s_rules.turn==1)?act:idle;
 
@@ -847,9 +1094,9 @@ void cue_game_draw_overlay(uint16_t *fb) {
         }
         /* top row (one line): NAME + frames-won at each edge, frame points centre */
         char p1s[14], p2s[14];
-        if (match) { snprintf(p1s,sizeof p1s,"P1 %d", s_frames[0]);
+        if (match) { snprintf(p1s,sizeof p1s,"%s %d", p1n, s_frames[0]);
                      snprintf(p2s,sizeof p2s,"%d %s", s_frames[1], p2n); }
-        else       { snprintf(p1s,sizeof p1s,"P1"); snprintf(p2s,sizeof p2s,"%s", p2n); }
+        else       { snprintf(p1s,sizeof p1s,"%s", p1n); snprintf(p2s,sizeof p2s,"%s", p2n); }
         craft_font_draw(fb, p1s, lx, 3, c0);
         rtext(fb, p2s, rx, 3, c1);
         if (snk) {
@@ -878,23 +1125,40 @@ void cue_game_draw_overlay(uint16_t *fb) {
         }
         draw_spin_indicator(fb, 114, 110, 12);
         /* cue elevation (swerve) readout above the spin dial when raised */
-        if ((s_state == GS_AIM || s_state == GS_BACKSWING) && !(s_cpu && s_rules.turn == 1)) {
+        if ((s_state == GS_AIM || s_state == GS_BACKSWING) && !cur_is_cpu()) {
             float ev = fmaxf(s_elev, min_cue_elev(s_aim));
             if (ev > 0.01f) {
                 char eb[16]; snprintf(eb,sizeof eb,"ELEV %d", (int)(ev * 57.2958f + 0.5f));
                 rtext(fb, eb, 125, 92, RGB565C(120,220,255));
             }
         }
-        int cpu_thinking = (s_cpu && s_rules.turn == 1 && s_state == GS_AIM);
-        if (cpu_thinking) {
+        int cpu_thinking = (cur_is_cpu() && s_state == GS_AIM);
+        if (s_state == GS_DECIDE) {
+            char ob[44];
+            if (s_decide_type == 0) {
+                center(fb, "PUSH OUT?", 104, RGB565C(255,220,120));
+                center(fb, "A PUSH OUT   B PLAY", 119, RGB565C(200,220,200));
+            } else if (s_decide_type == 1) {
+                center(fb, "OPPONENT PUSHED OUT", 104, RGB565C(255,220,120));
+                center(fb, "A PLAY   B PASS BACK", 119, RGB565C(200,220,200));
+            } else {
+                center(fb, s_rules.msg, 104, RGB565C(255,180,120));
+                int p = snprintf(ob, sizeof ob, "A PLAY");
+                if (s_rules.dec_can_restore) p += snprintf(ob+p, sizeof ob-p, "  B AGAIN");
+                if (s_rules.dec_free_ball)   snprintf(ob+p, sizeof ob-p, "  LB FREE");
+                center(fb, ob, 119, RGB565C(200,220,200));
+            }
+        }
+        else if (cpu_thinking) {
             static const char *dots[4] = { "", ".", "..", "..." };
             char tb[40]; snprintf(tb, sizeof tb, "%s THINKING%s",
-                CUE_PERSONAS[s_persona].name, dots[(s_cpu_think >> 3) & 3]);
+                CUE_PERSONAS[cur_persona()].name, dots[(s_cpu_think >> 3) & 3]);
             center(fb, tb, 119, RGB565C(255,220,120));
         }
         else if (s_state == GS_PLACE) center(fb, "DPAD MOVE  RB LOOK  A OK", 119, RGB565C(240,240,160));
         else if (s_freelook) center(fb, "FREE LOOK  A BACK", 119, RGB565C(150,200,150));
-        else if (s_state == GS_AIM) center(fb, "LB LOOK", 119, RGB565C(120,150,120));
+        else if (s_state == GS_AIM) center(fb, s_rules.free_ball ? "FREE BALL  LB LOOK" : "LB LOOK", 119,
+                                           s_rules.free_ball ? RGB565C(120,220,255) : RGB565C(120,150,120));
         else if (s_state == GS_SHOOTING) center(fb, s_freeview ? "FREEVIEW" : "A FREEVIEW", 119, RGB565C(150,200,150));
         else if (s_msg_t > 0 && s_rules.msg[0]) center(fb, s_rules.msg, 30, RGB565C(255,230,140));
         break; }

@@ -39,6 +39,7 @@ void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
     memset(r, 0, sizeof(*r));
     r->kind = t->is_snooker;
     r->mode = t->kind;
+    r->R = t->R;
     r->cpu = cpu;
     r->turn = 0; r->winner = -1; r->open = 1; r->break_shot = 1;
     r->shots_remaining = 1; r->two_shot = 0; r->free_shot = 0;
@@ -128,8 +129,8 @@ static void resolve_pool(CueRules *r, CueBall *b, int n, int first_hit,
     }
 
     if (foul) {
-        if (r->mode == CUE_GAME_US8) {
-            /* US 8-ball: any foul → opponent gets ball-in-hand anywhere. */
+        if (r->mode != CUE_GAME_UK8) {
+            /* US / Chinese 8-ball (WPA): any foul → opponent ball-in-hand. */
             r->turn = 1 - r->turn; r->ball_in_hand = 1;
             r->two_shot = 0; r->shots_remaining = 1; r->free_shot = 0;
             snprintf(r->msg, sizeof r->msg, "FOUL: %s", why);
@@ -164,6 +165,47 @@ static int snk_on(const CueRules *r, int id) {
     return is_colour(id) && snk_value(id) == r->seq;   /* clearance */
 }
 
+/* Full-ball line of sight from `from` to a target ball at `to` (XZ plane): both
+ * extreme edges of the target must be reachable without a blocker in the way.
+ * Ported from 2dpool hasClearPath(). rad = ball radius (all equal in snooker). */
+static int clear_path(Vec3 from, Vec3 to, float rad,
+                      const CueBall *b, int n, int target_idx) {
+    float dx = to.x - from.x, dz = to.z - from.z;
+    float dist = sqrtf(dx*dx + dz*dz);
+    if (dist < 1e-4f) return 1;
+    float nx = dx / dist, nz = dz / dist;
+    float px = -nz, pz = nx;                 /* perpendicular unit */
+    float clr = rad + rad;                   /* cue radius + blocker radius */
+    for (int e = -1; e <= 1; e += 2) {       /* left / right extreme edge */
+        float ex = to.x + px * rad * e, ez = to.z + pz * rad * e;
+        float edx = ex - from.x, edz = ez - from.z;
+        float ed = sqrtf(edx*edx + edz*edz);
+        if (ed < 1e-4f) continue;
+        float enx = edx / ed, enz = edz / ed;
+        for (int i = 0; i < n; i++) {
+            if (i == target_idx || i == 0 || !b[i].on) continue;   /* skip cue + target */
+            float tx = b[i].pos.x - from.x, tz = b[i].pos.z - from.z;
+            float proj = tx * enx + tz * enz;
+            if (proj < 0.0f || proj > ed) continue;                /* behind / beyond */
+            float cxp = from.x + enx * proj, czp = from.z + enz * proj;
+            float ddx = b[i].pos.x - cxp, ddz = b[i].pos.z - czp;
+            if (sqrtf(ddx*ddx + ddz*ddz) < clr) return 0;          /* blocked */
+        }
+    }
+    return 1;
+}
+
+int cue_rules_is_snookered(const CueRules *r, const CueBall *b, int n) {
+    if (!r->kind || !b[0].on) return 0;       /* snooker only; cue must be on */
+    int any_target = 0;
+    for (int i = 1; i < n; i++) {
+        if (!b[i].on || !snk_on(r, b[i].id)) continue;
+        any_target = 1;
+        if (clear_path(b[0].pos, b[i].pos, r->R, b, n, i)) return 0;  /* one is visible */
+    }
+    return any_target;                        /* all targets blocked → snookered */
+}
+
 static void resolve_snooker(CueRules *r, CueBall *b, int n, int first_hit,
                             int scratch, const int *potted, int np) {
     r->break_shot = 0;            /* the opening break is over once it's resolved */
@@ -175,40 +217,96 @@ static void resolve_snooker(CueRules *r, CueBall *b, int n, int first_hit,
     int reds_left = 0;
     for (int i = 0; i < n; i++) if (b[i].on && is_red(b[i].id)) reds_left++;
     r->reds_left = reds_left;
+    /* Free ball (awarded when the incoming player was snookered): for this one
+     * shot, ANY ball may be struck/potted as the ball-on, scoring the ball-on's
+     * value. Consumed whether the shot is legal or a foul. */
+    int fb = r->free_ball; r->free_ball = 0;
+    int bon_val = (target_before == 2) ? r->seq : 1;   /* value of the red/clearance ball-on */
     int legal_pots = 0, illegal_pot = 0, maxpot = 0, reds_potted = 0;
     for (int k = 0; k < np; k++) {
-        if (snk_on(r, potted[k])) legal_pots += snk_value(potted[k]);
-        else illegal_pot = 1;
+        int on = snk_on(r, potted[k]);
+        if (on)       legal_pots += snk_value(potted[k]);
+        else if (fb)  legal_pots += bon_val;           /* free-ball pot scores the ball-on */
+        else          illegal_pot = 1;
+        if (on ? is_red(potted[k]) : (fb && target_before == 0)) reds_potted++;
         if (snk_value(potted[k]) > maxpot) maxpot = snk_value(potted[k]);
-        if (is_red(potted[k])) reds_potted++;
     }
     int foul = 0;
-    if (scratch || first_hit < 0 || !snk_on(r, first_hit) || illegal_pot) foul = 1;
+    if (scratch || first_hit < 0 || (!fb && !snk_on(r, first_hit)) || illegal_pot) foul = 1;
 
-    /* respot every potted colour unless it was legally cleared in sequence */
+    /* respot every potted colour unless it was legally cleared in sequence
+     * (a free-ball colour ALWAYS respots, even in the clearance phase) */
     for (int k = 0; k < np; k++)
-        if (is_colour(potted[k]) && (foul || target_before != 2))
+        if (is_colour(potted[k]) && (foul || fb || target_before != 2))
             respot_colour(r, b, n, potted[k]);
 
     if (foul) {
+        int off = r->turn, opp = 1 - off;
+        /* "Miss" = failed to HIT a ball-on (air shot or wrong first ball); an
+         * illegal pot off a correct first contact is a foul but NOT a miss.
+         * Evaluated against the pre-shot target (r->target still == target_before). */
+        int is_miss = (first_hit < 0) || (!fb && !snk_on(r, first_hit));
+
         int fv = 4;
         int tv = (target_before == 2) ? r->seq : 1;
         if (tv > fv) fv = tv;
         if (first_hit >= 0 && snk_value(first_hit) > fv) fv = snk_value(first_hit);
         if (maxpot > fv) fv = maxpot;
-        r->score[1 - r->turn] += fv;
+        r->score[opp] += fv;
         r->brk = 0;
-        if (scratch) r->ball_in_hand = 1;
-        r->turn = 1 - r->turn;
-        r->target = (r->reds_left > 0) ? 0 : 2;
-        if (r->target == 2 && r->seq < 2) r->seq = 2;
-        snprintf(r->msg, sizeof r->msg, "FOUL +%d", fv);
+
+        int target_after = (r->reds_left > 0) ? 0 : 2;
+        int seq_after = (target_after == 2 && r->seq < 2) ? 2 : r->seq;
+
+        /* Snookers-needed exemption: a player who can no longer catch up on the
+         * balls left (deficit beyond what's still on the table) is exempt from
+         * the miss rule — no "miss" is called, but 3 misses still forfeits. */
+        int remaining;
+        if (r->reds_left > 0) remaining = r->reds_left * 8 + 27;   /* reds(+black) + colours */
+        else { remaining = 0; for (int v = (seq_after < 2 ? 2 : seq_after); v <= 7; v++) remaining += v; }
+        int deficit = r->score[opp] - r->score[off];
+        int needs_snookers = deficit > remaining;
+        int miss_called = is_miss && !r->was_snookered && !needs_snookers;
+
+        /* 3-consecutive-miss forfeit (genuine, non-snookered misses only) */
+        if (is_miss && !r->was_snookered) {
+            if (++r->cmiss[off] >= 3) {
+                r->frame_over = 1; r->winner = opp;
+                snprintf(r->msg, sizeof r->msg, "3 MISSES - LOSS");
+                return;
+            }
+        } else if (!is_miss) r->cmiss[off] = 0;
+
+        /* Is the incoming player snookered on the post-foul ball-on? → free ball.
+         * (Skipped after a scratch — the cue is replaced in the D.) */
+        int opp_snk = 0;
+        if (!scratch) {
+            int sv_t = r->target, sv_s = r->seq;
+            r->target = target_after; r->seq = seq_after;
+            opp_snk = cue_rules_is_snookered(r, b, n);
+            r->target = sv_t; r->seq = sv_s;
+        }
+
+        r->target = target_after; r->seq = seq_after;
+        r->dec_offender = off; r->dec_penalty = fv; r->dec_scratch = scratch;
+        r->dec_can_restore = miss_called; r->dec_free_ball = opp_snk;
+
+        if (miss_called || opp_snk) {
+            /* a real choice exists → park for the opponent's decision */
+            r->decision = CUE_DEC_PENDING;
+            snprintf(r->msg, sizeof r->msg, miss_called ? "FOUL & MISS +%d" : "FOUL +%d", fv);
+        } else {
+            r->turn = opp;
+            if (scratch) r->ball_in_hand = 1;
+            snprintf(r->msg, sizeof r->msg, "FOUL +%d", fv);
+        }
         return;
     }
 
     /* legal */
     r->score[r->turn] += legal_pots;
     r->brk += legal_pots;
+    if (legal_pots > 0) r->cmiss[r->turn] = 0;     /* a pot resets the miss counter */
 
     if (target_before == 0) {                 /* was on a red */
         if (reds_potted > 0) r->target = 1;   /* now a colour */
@@ -229,6 +327,7 @@ static void resolve_snooker(CueRules *r, CueBall *b, int n, int first_hit,
 
     if (legal_pots > 0) { snprintf(r->msg, sizeof r->msg, "BREAK %d", r->brk); }
     else {
+        r->cmiss[r->turn] = 0;          /* a legal shot (good safety) clears misses */
         r->brk = 0; r->turn = 1 - r->turn;
         r->target = (r->reds_left > 0) ? 0 : 2;
         if (r->target == 2 && r->seq < 2) r->seq = 2;
@@ -252,6 +351,27 @@ static void respot_nine(CueRules *r, CueBall *b, int n) {
 
 static void resolve_9ball(CueRules *r, CueBall *b, int n, int first_hit,
                           int scratch, int cushion, const int *potted, int np) {
+    int was_break = r->break_shot;
+
+    /* Push-out (WPA): the shot carries no obligation to hit the lowest ball or
+     * drive a ball to a rail — the ONLY foul is pocketing the cue ball. A potted
+     * 9 is spotted (no win). The opponent then chooses to play from here or
+     * pass the shot back. */
+    if (r->is_pushout) {
+        r->is_pushout = 0; r->pushout_avail = 0; r->break_shot = 0;
+        for (int k = 0; k < np; k++) if (potted[k] == 9) respot_nine(r, b, n);
+        r->seq = nine_lowest(b, n);
+        if (scratch) {                              /* the one push-out foul */
+            r->cfoul[r->turn]++;
+            r->turn = 1 - r->turn; r->ball_in_hand = 1;
+            snprintf(r->msg, sizeof r->msg, "PUSH-OUT FOUL");
+            return;
+        }
+        r->turn = 1 - r->turn;                      /* opponent decides */
+        r->pushout_resp = 1; r->msg[0] = 0;
+        return;
+    }
+
     /* lowest ball at the START of the shot = min(still-on, potted-this-shot) */
     int lowest = nine_lowest(b, n);
     int nine_potted = 0;
@@ -288,6 +408,9 @@ static void resolve_9ball(CueRules *r, CueBall *b, int n, int first_hit,
     if (np > 0) r->msg[0] = 0;                   /* potted legally → carry on */
     else { r->turn = 1 - r->turn; r->msg[0] = 0; }
     r->break_shot = 0; r->seq = nine_lowest(b, n);
+
+    /* After the opening break, the player now at the table may push out. */
+    if (was_break && !r->frame_over) { r->pushout_avail = 1; r->pushout_offer = 1; }
 }
 
 void cue_rules_resolve(CueRules *r, CueBall *b, int n, const CueWorld *w,
@@ -300,9 +423,29 @@ void cue_rules_resolve(CueRules *r, CueBall *b, int n, const CueWorld *w,
     else                               resolve_pool(r, b, n, first_hit, scratch, cushion, potted, np);
 }
 
+/* Apply the opponent's choice after a snooker foul that offered one (decision
+ * was parked at CUE_DEC_PENDING). On CUE_DEC_REPLAY the host must have restored
+ * the pre-shot ball layout + target/seq/reds_left from its own snapshot first;
+ * the penalty already stands. Returns the next player to shoot. */
+int cue_rules_apply_decision(CueRules *r, int decision) {
+    int off = r->dec_offender, opp = 1 - off;
+    int can_restore = r->dec_can_restore, free_ball = r->dec_free_ball;
+    r->decision = CUE_DEC_NONE;
+    r->dec_can_restore = r->dec_free_ball = 0;
+    if (decision == CUE_DEC_REPLAY && can_restore) {
+        r->turn = off;                        /* offender plays again from restored layout */
+        r->ball_in_hand = 0; r->free_ball = 0;
+    } else {
+        r->turn = opp;
+        r->ball_in_hand = r->dec_scratch ? 1 : 0;
+        r->free_ball = (decision == CUE_DEC_FREEBALL && free_ball) ? 1 : 0;
+    }
+    return r->turn;
+}
+
 int cue_rules_ball_legal(const CueRules *r, const CueBall *b, int n, int id) {
     if (id == CUE_ID_CUE) return 0;
-    if (r->kind) return snk_on(r, id);
+    if (r->kind) return r->free_ball ? 1 : snk_on(r, id);   /* free ball: any ball is on */
     if (r->mode == CUE_GAME_US9) return id == nine_lowest(b, n);  /* must hit lowest */
     if (r->open) return id != 8;                 /* open table: anything but the 8 */
     /* the 8 is legal ONLY once your own group is fully cleared */

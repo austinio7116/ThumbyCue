@@ -349,27 +349,46 @@ static void substep(CueWorld *w, CueBall *balls, int n, float h, uint32_t *ev) {
             ball_spin_orient(b, h);                  /* keep spinning as it drops */
             continue;
         }
+        /* Asleep ball: at rest with no live spin → skip cloth/integrate entirely.
+         * A collision in step 2 wakes it (sets velocity). This is exact (a still
+         * ball doesn't move) and is the big win on this low-drag cloth, where a
+         * shot's long roll-out leaves most balls stopped for ~100+ substeps each. */
+        float v2 = b->vel.x*b->vel.x + b->vel.z*b->vel.z;
+        if (v2 < V_STOP*V_STOP &&
+            b->w.y > -W_STOP && b->w.y < W_STOP &&
+            b->w.x > -0.05f && b->w.x < 0.05f &&
+            b->w.z > -0.05f && b->w.z < 0.05f) continue;
         ball_cloth(w, b, h);
         b->pos = v3_add(b->pos, v3_scale(b->vel, h));
         b->pos.y = w->R;
         ball_spin_orient(b, h);
     }
     /* 2. ball–ball (skip droppers). Record the CUE ball's (index 0) first
-     * object-ball contact for the rules. */
+     * object-ball contact for the rules. A cheap per-axis broad-phase reject
+     * (exactly equivalent to the dist>=2R early-out, but no sqrt) skips the far
+     * pairs — a big win on snooker's 22 balls (O(n^2) pairs per substep). */
+    const float bb_min = 2.0f * w->R;
     for (int i = 0; i < n; i++) {
         if (!balls[i].on || balls[i].drop > 0.0f) continue;
         for (int j = i + 1; j < n; j++) {
             if (!balls[j].on || balls[j].drop > 0.0f) continue;
+            float dx = balls[i].pos.x - balls[j].pos.x;
+            float dz = balls[i].pos.z - balls[j].pos.z;
+            if (dx > bb_min || dx < -bb_min || dz > bb_min || dz < -bb_min) continue;
             if (collide_ball_ball(w, &balls[i], &balls[j])) {
                 if (ev) *ev |= CUE_EV_BALL_HIT;
                 if (w->first_hit < 0 && i == 0) { w->first_hit = balls[j].id; w->first_hit_idx = j; }
             }
         }
     }
-    /* 3. cushions + jaws, then 4. pockets (skip droppers) */
+    /* 3. cushions + jaws, then 4. pockets (skip droppers AND asleep balls — a
+     * resting ball can't be entering a cushion or pocket, and this loop's
+     * per-ball cushion/jaw scan is the hot path during the long roll-out). */
     for (int i = 0; i < n; i++) {
         CueBall *b = &balls[i];
         if (!b->on || b->drop > 0.0f) continue;
+        float v2 = b->vel.x*b->vel.x + b->vel.z*b->vel.z;
+        if (v2 < V_STOP*V_STOP) continue;
         collide_cushions(w, b, ev);
         if (check_pockets(w, b) && ev) *ev |= CUE_EV_POCKET;
     }
@@ -388,13 +407,21 @@ int cue_phys_moving(const CueWorld *w, const CueBall *balls, int n) {
     return 0;
 }
 
+/* Substep size actually used. The live game runs at CUE_H (2 kHz); the AI's
+ * headless ranking sims switch to a coarser step (cue_phys_set_substep) for ~2x
+ * fewer iterations — collision is overlap-based and still well under a ball
+ * radius per step, so the leave estimate is unchanged for shot ranking. */
+static float g_sub_h = CUE_H;
+void cue_phys_set_substep(float h) { g_sub_h = (h > 0.0f) ? h : CUE_H; }
+
 int cue_phys_step(CueWorld *w, CueBall *balls, int n, float dt, uint32_t *events) {
     if (events) *events = 0;
+    float h = g_sub_h;
     w->_acc += dt;
     int iters = 0;
-    while (w->_acc >= CUE_H && iters < CUE_MAX_SUB) {
-        substep(w, balls, n, CUE_H, events);
-        w->_acc -= CUE_H;
+    while (w->_acc >= h && iters < CUE_MAX_SUB) {
+        substep(w, balls, n, h, events);
+        w->_acc -= h;
         iters++;
     }
     if (iters >= CUE_MAX_SUB) w->_acc = 0.0f;   /* shed backlog */

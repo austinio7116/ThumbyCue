@@ -9,6 +9,8 @@
 #include "cue_ai.h"
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -82,19 +84,22 @@ static void ai_sim(const CueWorld *w, const CueBall *balls, int n, int cue_idx,
         s_sb[i].drop = 0.0f;
     }
     extern void cue_phys_strike(const CueWorld*, CueBall*, Vec3, float, float, float);
+    extern void cue_phys_set_substep(float);
+    cue_phys_set_substep(1.0f / 1000.0f);     /* coarser step: ~2x faster ranking sims */
     Vec3 dir = v3(cosf(aim), 0, sinf(aim));
     cue_phys_strike(&s_sw, &s_sb[cue_idx], dir, power01 * 8.5f, tip_side, tip_vert);
 
-    /* Settle, but cap the roll-out: scratch / first-contact / the bulk of the
-     * cue's travel all resolve within the first ~2.5 s of sim, and the leave
-     * estimate barely changes after that — so we stop early to keep planning
-     * fast on the device. dt=0.05 → 100 substeps/call (under the 400 cap). */
-    for (int it = 0; it < 45; it++) {
+    /* Settle to a TRUE rest. This engine's cloth is low-drag — a ball rolls for
+     * ~5-8 s (120-170 calls at dt=0.05) before stopping, so the old 45-call cap
+     * captured the cue ball MID-ROLL and the AI's position estimate was garbage.
+     * Run until everything actually stops (natural break), with a safe ceiling. */
+    for (int it = 0; it < 220; it++) {
         uint32_t ev = 0;
         cue_phys_step(&s_sw, s_sb, n, 0.05f, &ev);
         if (!s_sb[cue_idx].on) break;
         if (!cue_phys_moving(&s_sw, s_sb, n)) break;
     }
+    cue_phys_set_substep(0.0f);                /* restore the live 2 kHz step */
 
     out->cue_end = s_sb[cue_idx].pos;
     out->cue_potted = !s_sb[cue_idx].on;
@@ -134,7 +139,61 @@ static Vec3 ghost_ball(Vec3 target, Vec3 aim_pt, float R) {
 }
 
 /* Functional pocket aim point — the drop centre (already set back). */
-static Vec3 pocket_aim(const AiCtx *c, int pk) { return c->w->pocket[pk]; }
+static float wrapPI(float a) {
+    while (a >  3.14159265f) a -= 6.2831853f;
+    while (a < -3.14159265f) a += 6.2831853f;
+    return a;
+}
+/* Where to aim the OBJECT ball within the pocket — NOT the dead centre. Ported
+ * from 2dpool getPocketAimPoint: the object ball, approaching from `target`, must
+ * thread between the pocket's two knuckle "jaws". For each jaw we find the
+ * limiting aim angle that just clears it (ball + knuckle radius), giving a valid
+ * angular WINDOW; we aim down the middle of it. On a cut this window centre
+ * shifts AWAY from the near jaw, so the ball misses it instead of rattling — the
+ * whole reason snooker's tight pockets were unplayable with centre-aim. */
+static Vec3 pocket_aim_t(const AiCtx *c, int pk, Vec3 target) {
+    const CueWorld *w = c->w;
+    Vec3 pocket = w->pocket[pk];
+    if (w->njaw < 2) return pocket;
+    /* the two knuckles flanking this pocket = its two nearest jaw circles */
+    int j1 = -1, j2 = -1; float d1 = 1e18f, d2b = 1e18f;
+    for (int i = 0; i < w->njaw; i++) {
+        float dd = d2(pocket, w->jaw[i]);
+        if (dd < d1)      { d2b = d1; j2 = j1; d1 = dd; j1 = i; }
+        else if (dd < d2b){ d2b = dd; j2 = i; }
+    }
+    if (j1 < 0 || j2 < 0) return pocket;
+    Vec3 ref = sub2(pocket, target);
+    float distP = len2(ref);
+    if (distP < 1e-4f) return pocket;
+    float refA = atan2f(ref.z, ref.x);
+    float clr = c->t->R + w->jaw_r + c->t->R * 0.12f;   /* ball + knuckle + small margin */
+    /* Angle to each jaw (relative to the pocket-centre direction) and the angular
+     * half-width the ball needs to clear it. The ball threads the gap BETWEEN the
+     * two jaws, so we clear the lower-angle jaw on its UPPER (gap) side and the
+     * upper-angle jaw on its LOWER side. (The old code keyed the clear side off
+     * sign(rel) vs the pocket centre — wrong when BOTH jaws sit to one side of the
+     * pocket centre, i.e. a shallow down-the-rail shot: it then aimed straight at
+     * the near jaw. The gap, not the pocket centre, is the target.) */
+    float ang[2], hw[2]; int jj[2] = { j1, j2 };
+    for (int k = 0; k < 2; k++) {
+        Vec3 J = w->jaw[jj[k]];
+        float dJ = d2(J, target);
+        ang[k] = wrapPI(atan2f(J.z - target.z, J.x - target.x) - refA);
+        float ratio = clr / (dJ > clr ? dJ : clr);
+        hw[k] = asinf(ratio > 1.0f ? 1.0f : ratio);
+    }
+    int loi = (ang[0] <= ang[1]) ? 0 : 1, hii = 1 - loi;
+    float lo = ang[loi] + hw[loi];     /* clear the lower jaw on its gap side */
+    float hi = ang[hii] - hw[hii];     /* clear the upper jaw on its gap side */
+    /* aim at the centre of the clear window; if the gap is too tight to clear both
+     * (window inverts) aim between the jaw centres — the best the pocket allows. */
+    float chosen = (lo <= hi) ? 0.5f * (lo + hi) : 0.5f * (ang[0] + ang[1]);
+    float fa = refA + chosen;
+    Vec3 sd = v3(cosf(fa), 0, sinf(fa));
+    float t = dot2(ref, sd); if (t < 0) t = 0; if (t > distP) t = distP;
+    return v3(target.x + sd.x * t, c->t->R, target.z + sd.z * t);
+}
 
 /* Is the straight path start→end clear of all balls except `exclude` idx? */
 static int path_clear(const AiCtx *c, Vec3 start, Vec3 end, int exclude) {
@@ -235,6 +294,14 @@ static float calc_power(const AiCtx *c, float dg_m, float dpk_m, float cut) {
 #define PWR_K (1.0f / 46.0f)
 static float power01_of(float js_power) { return clampf(js_power * PWR_K, 0.05f, 1.0f); }
 
+/* Minimum potting power: js_power needed for the object ball to reach the pocket.
+ * The divisor is the cloth-travel calibration. 2dpool used /45 (its px-space
+ * friction); ThumbyCue's cloth is far lower-drag — measured true min-power-to-pot
+ * is ~3-4x below the /45 figure — so without this the AI was floored at ~0.35
+ * power and never played soft position shots. /150 tracks the engine's real
+ * roll-out (small margin over the measured minimum so pots still reach). */
+#define POT_MIN_DIV 150.0f
+
 /* ---- next-shot target set for positional evaluation ------------------ */
 /* Returns count; fills out_idx[] with ball indices that would be legal to
  * play AFTER potting `just_idx`. Approximation of ai.js evaluatePositionQuality
@@ -262,11 +329,28 @@ static int next_targets(const AiCtx *c, int just_idx, int *out_idx) {
                 if (best >= 0) out_idx[cnt++] = best;
             }
         }
+    } else if (c->r->mode == CUE_GAME_US9) {
+        /* 9-ball: the NEXT ball-on is the lowest still on the table once the ball
+         * we're about to pot is gone. (cue_rules_ball_legal only ever names the
+         * CURRENT lowest — i.e. just_idx — so using it here left position blind.) */
+        int lo = -1, loid = 999;
+        for (int i = 1; i < c->n; i++)
+            if (c->b[i].on && i != just_idx && c->b[i].id <= 9 && c->b[i].id < loid)
+                { loid = c->b[i].id; lo = i; }
+        if (lo >= 0) out_idx[cnt++] = lo;
     } else {
-        for (int i = 0; i < c->n; i++)
-            if (c->b[i].on && i != just_idx && i != 0 &&
-                cue_rules_ball_legal(c->r, c->b, c->n, c->b[i].id))
-                out_idx[cnt++] = i;
+        /* 8-ball: the rest of our group; if this pot clears the group, the 8 is
+         * the ball we'll be shooting next, so position should be judged on it. */
+        int mygrp = c->r->group[c->r->turn];     /* 0 = open table */
+        int eight = -1, remaining = 0;
+        for (int i = 1; i < c->n; i++) {
+            if (!c->b[i].on || i == just_idx) continue;
+            int id = c->b[i].id;
+            if (id == 8) { eight = i; continue; }
+            int g = (id >= 1 && id <= 7) ? 1 : 2;
+            if (mygrp == 0 || g == mygrp) { out_idx[cnt++] = i; remaining++; }
+        }
+        if (remaining == 0 && eight >= 0) out_idx[cnt++] = eight;
     }
     return cnt;
 }
@@ -284,7 +368,7 @@ static float position_quality(const AiCtx *c, Vec3 cue_pos, int just_idx,
         Vec3 tpos = pos_balls ? pos_balls[ti] : c->b[ti].pos;
         if (!path_clear(c, cue_pos, tpos, ti)) continue;
         for (int pk = 0; pk < c->w->npocket; pk++) {
-            Vec3 ap = pocket_aim(c, pk);
+            Vec3 ap = pocket_aim_t(c, pk, tpos);
             if (!path_clear(c, tpos, ap, ti)) continue;
             float diff = potting_difficulty(c, cue_pos, tpos, pk);
             if (diff < 20.0f) continue;
@@ -359,7 +443,7 @@ static int eval_pot(const AiCtx *c, int tidx, int pk,
     float R = c->t->R;
     Vec3 cue = c->b[0].pos;
     Vec3 target = c->b[tidx].pos;
-    Vec3 ap = pocket_aim(c, pk);
+    Vec3 ap = pocket_aim_t(c, pk, target);
 
     if (!path_clear(c, target, ap, tidx)) return 0;
     if (!pocket_approach_ok(c, target, pk)) return 0;
@@ -378,7 +462,7 @@ static int eval_pot(const AiCtx *c, int tidx, int pk,
     if (diff <= 0.0f) return 0;
 
     float cutF = 1.0f / fmaxf(0.3f, cosf(cut*RAD));
-    float minPot = (dg + dpk) * c->S / 45.0f + 2.0f;
+    float minPot = (dg + dpk) * c->S / POT_MIN_DIV + 2.0f;
     float powPenScale = fmaxf(0.05f, 1.0f + (1.0f - c->p->power_bias) * 3.0f);
 
     float bestPot = -1e9f;
@@ -599,10 +683,16 @@ static int find_kick(const AiCtx *c, Cand *out) {
 
 /* ---------------------------------------------------------------------- */
 /* Resumable planner: cue_ai_plan_start() does the cheap analytic pass, then    */
-/* cue_ai_plan_tick() runs ONE engine sim per call (so the render loop stays     */
-/* live with a thinking indicator). cue_ai_plan() wraps them synchronously.      */
+/* cue_ai_plan_tick() runs a few engine sims per call (so the render loop stays   */
+/* live with a thinking indicator). cue_ai_plan() wraps them synchronously.       */
+/* SIM_CAP: how many viable variants to verify with the REAL engine (each run to  */
+/* a true settle now, which is what makes the leave estimate trustworthy). 2dpool  */
+/* sims every viable variant, but its cloth settles in ~1s; ours rolls 5-8s, so a  */
+/* full-settle sim is far costlier — we sim the analytically-best SIM_CAP and pick  */
+/* by real position. The coarse substep (1/1000) + SIMS_PER_TICK keep think short. */
 /* ---------------------------------------------------------------------- */
-#define SIM_CAP 6
+#define SIM_CAP 32        /* ceiling; the per-plan budget scales with persona skill */
+#define SIMS_PER_TICK 1   /* one sim/frame keeps the thinking-orbit smooth */
 enum { PH_IDLE = 0, PH_SIM, PH_DONE };
 
 static struct {
@@ -622,7 +712,11 @@ static void plan_finalize(void) {
      * — every selectable shot is then scratch/foul-verified. Unsimmed variants
      * have unknown legality and must not be picked on position alone. */
     int npool = P.sim_cap > 0 ? (P.npool < P.sim_cap ? P.npool : P.sim_cap) : P.npool;
-    float posAware = P.posAware;
+    /* Cap the position weight so the HEURISTIC pot-chance always carries real
+     * weight — otherwise a pure-position persona (The Machine) happily picks a
+     * rattle-prone high-power variant just for a slightly better leave and misses
+     * the pot. We want "good chance to pot AND good leave", never leave-at-any-cost. */
+    float posAware = P.posAware; if (posAware > 0.6f) posAware = 0.6f;
 
     /* final sort: blend pot/position by persona.position, soft-shot bonus, and
      * a HARD penalty for shots that scratch (in-off) or hit the wrong ball first
@@ -670,12 +764,17 @@ static void plan_finalize(void) {
         }
     }
 
+    if (getenv("CUE_AIDBG")) {
+        fprintf(stderr, "[AI %s] pot=%.0f pos=%.0f pow=%.2f vspin=%.2f tgt=%d posAware=%.2f (pool=%d simmed=%d)\n",
+                p->name, best.potScore, best.posScore, best.power01, best.tip_vert,
+                (P.ti<c->n? c->b[P.ti].id : -1), posAware, P.npool, npool);
+    }
     float aimErr = (rnd(P.rng) - 0.5f) * 2.0f * p->line_acc * RAD;
     float powErr = (rnd(P.rng) - 0.5f) * 2.0f * p->power_acc;
     out.aim = best.aim + aimErr;
     out.power01 = clampf(best.power01 * (1.0f + powErr), 0.05f, 1.0f);
     out.tip_vert = best.tip_vert; out.tip_side = 0.0f;
-    out.safe = 0; out.valid = 1;
+    out.safe = 0; out.valid = 1; out.score = best.potScore;
     P.result = out;
 }
 
@@ -692,12 +791,45 @@ void cue_ai_plan_start(const CueWorld *w, const CueTable *t, const CueRules *r,
     AiCtx *c = &P.ctx;
     CueAIShot out; memset(&out, 0, sizeof out);
 
-    /* 0. Break shot: hit the rack firmly, clipped a few degrees off-centre. */
+    /* 0. Break shot. */
     if (r->break_shot) {
-        /* aim at the centroid of LEGAL balls — for 9-ball that's just the 1
-         * (apex), so we hit the correct ball first; for 8-ball/snooker it's the
-         * pack centre. */
-        Vec3 cue = balls[0].pos, cen = v3(0,0,0); int m = 0;
+        Vec3 cue = balls[0].pos;
+        if (c->snooker) {
+            /* Snooker break (2dpool playBreakShot): the reds sit behind the pink
+             * with the blue on the centre spot, so a straight pack-centre break
+             * runs the cue THROUGH the blue (foul). Instead clip the THIN outer
+             * edge of a BACK red ON THE CUE'S SIDE — the cue travels up that side,
+             * grazes the pack, and returns to baulk, never crossing the centre. */
+            float side = (cue.z >= 0.0f) ? 1.0f : -1.0f;
+            int best = -1; float bestd = -1.0f;
+            for (int i = 1; i < n; i++) {           /* furthest red on the cue's side */
+                if (!balls[i].on || balls[i].id >= CUE_ID_YELLOW) continue;
+                if (balls[i].pos.z * side <= 0.0f) continue;     /* must be cue's side */
+                float dd = d2(cue, balls[i].pos);
+                if (dd > bestd) { bestd = dd; best = i; }
+            }
+            if (best < 0) for (int i = 1; i < n; i++)            /* fallback: any furthest red */
+                if (balls[i].on && balls[i].id < CUE_ID_YELLOW) {
+                    float dd = d2(cue, balls[i].pos); if (dd > bestd) { bestd = dd; best = i; }
+                }
+            if (best >= 0) {
+                Vec3 tgt = balls[best].pos;
+                Vec3 ad = nrm2(sub2(tgt, cue));
+                Vec3 perp = v3(-ad.z, 0, ad.x);
+                if (perp.z * side < 0.0f) { perp.x = -perp.x; perp.z = -perp.z; }  /* toward outer edge */
+                float off = c->t->R * (1.8f + (rnd(rng)-0.5f)*0.3f);
+                Vec3 ap = v3(tgt.x + perp.x*off, 0, tgt.z + perp.z*off);
+                out.aim = atan2f(ap.z - cue.z, ap.x - cue.x);
+                /* Controlled pace, NOT a smash: clip the pack thin and bring the
+                 * cue back toward baulk. Too hard (≈0.6+) overruns into the far
+                 * corner (in-off); ~0.50 returns the cue to the baulk cushion. */
+                out.power01 = clampf(0.44f * (1.0f + (rnd(rng)-0.5f)*2.0f*p->power_acc), 0.40f, 0.58f);
+                out.valid = 1; P.result = out; return;
+            }
+        }
+        /* Pool break: drive the pack centre (for 9-ball the legal centroid = the 1
+         * apex), clipped a few degrees off so a dead-straight smash doesn't stall. */
+        Vec3 cen = v3(0,0,0); int m = 0;
         for (int i = 1; i < n; i++)
             if (balls[i].on && cue_rules_ball_legal(r, balls, n, balls[i].id))
                 { cen = v3(cen.x+balls[i].pos.x, 0, cen.z+balls[i].pos.z); m++; }
@@ -707,8 +839,7 @@ void cue_ai_plan_start(const CueWorld *w, const CueTable *t, const CueRules *r,
         Vec3 d = sub2(cen, cue);
         float off = (2.5f + rnd(rng)*2.0f) * RAD * (rnd(rng) < 0.5f ? -1.0f : 1.0f);
         out.aim = atan2f(d.z, d.x) + off;
-        float pw = c->snooker ? 0.90f : 0.95f;
-        out.power01 = clampf(pw * (1.0f + (rnd(rng)-0.5f)*2.0f*p->power_acc), 0.5f, 1.0f);
+        out.power01 = clampf(0.95f * (1.0f + (rnd(rng)-0.5f)*2.0f*p->power_acc), 0.5f, 1.0f);
         out.valid = 1; P.result = out; return;
     }
 
@@ -771,14 +902,14 @@ void cue_ai_plan_start(const CueWorld *w, const CueTable *t, const CueRules *r,
     /* 3. build the viable variant pool for the chosen pot */
     int ti = gti[chosen], pk = gpk[chosen];
     float R = t->R;
-    Vec3 cue = balls[0].pos, target = balls[ti].pos, ap = pocket_aim(c, pk);
+    Vec3 cue = balls[0].pos, target = balls[ti].pos, ap = pocket_aim_t(c, pk, target);
     Vec3 pdir = nrm2(sub2(ap, target));
     Vec3 ghost = v3(target.x - pdir.x*2*R, 0, target.z - pdir.z*2*R);
     float cut = acosf(clampf(dot2(nrm2(sub2(ghost,cue)), pdir), -1, 1)) * DEG;
     float aim = atan2f(ghost.z - cue.z, ghost.x - cue.x);
     float dg = d2(cue, ghost), dpk = d2(target, ap);
     float cutF = 1.0f / fmaxf(0.3f, cosf(cut*RAD));
-    float minPot = (dg+dpk)*c->S/45.0f + 2.0f;
+    float minPot = (dg+dpk)*c->S/POT_MIN_DIV + 2.0f;
     float maxspin = p->spin_ability;
     float powPenScale = fmaxf(0.05f, 1.0f + (1.0f - p->power_bias) * 3.0f);
     float bestPot = gpot[chosen];
@@ -794,6 +925,9 @@ void cue_ai_plan_start(const CueWorld *w, const CueTable *t, const CueRules *r,
             if (spinY < -0.05f) eff *= 1.0f + 0.20f * fminf(1.0f, fabsf(spinY));
             float potScore = potting_difficulty(c, cue, target, pk) - (eff/50.0f)*15.0f*powPenScale;
             if (!is_corner(c, pk) && eff > 30.0f) potScore -= 15.0f;
+            /* tight (snooker / rounded) pockets reject pace — a ball hit too hard
+             * rattles the jaws and stays out, so heavier pace lowers pot-chance. */
+            if (c->t->pocket_round && eff > 22.0f) potScore -= (eff - 22.0f) * 0.7f;
             if (potScore < bestPot - 15.0f) continue;
             Cand v; memset(&v,0,sizeof v);
             v.tidx = ti; v.pk = pk; v.ghost = ghost; v.aim = aim; v.cut = cut;
@@ -809,17 +943,23 @@ void cue_ai_plan_start(const CueWorld *w, const CueTable *t, const CueRules *r,
      * the limited sim budget lands on the variants whose power/spin actually
      * give a good LEAVE — this is what makes position play work. A small bonus
      * keeps a soft, reliable pot near the top as a safe option. */
+    float psw = posAware > 0.6f ? 0.6f : posAware;   /* keep pot-chance always weighted */
     for (int i = 0; i < npool; i++)
         for (int j = i+1; j < npool; j++) {
-            float ai_ = P.pool[i].potScore*(1-posAware) + P.pool[i].posScore*posAware
+            float ai_ = P.pool[i].potScore*(1-psw) + P.pool[i].posScore*psw
                         + (1.0f - P.pool[i].power01)*6.0f;
-            float aj_ = P.pool[j].potScore*(1-posAware) + P.pool[j].posScore*posAware
+            float aj_ = P.pool[j].potScore*(1-psw) + P.pool[j].posScore*psw
                         + (1.0f - P.pool[j].power01)*6.0f;
             if (aj_ > ai_) { Cand tmp=P.pool[i]; P.pool[i]=P.pool[j]; P.pool[j]=tmp; }
         }
 
     P.npool = npool; P.ti = ti; P.posAware = posAware;
-    P.sim_cap = (npool < SIM_CAP ? npool : SIM_CAP);
+    /* More simulations for stronger / more positional personas — they exploit the
+     * extra leave samples; weak potters don't. (The thinking-orbit hides the
+     * longer search.) ~10 for a rookie up to SIM_CAP for The Machine. */
+    int cap = 10 + (int)(p->position * 22.0f + 0.5f);
+    if (cap > SIM_CAP) cap = SIM_CAP;
+    P.sim_cap = (npool < cap ? npool : cap);
     P.sim_i = 0;
     /* Always sim the top variants — even a persona with no positional play must
      * not deliberately scratch or foul. The sim is what catches those. */
@@ -830,25 +970,25 @@ void cue_ai_plan_start(const CueWorld *w, const CueTable *t, const CueRules *r,
 int cue_ai_plan_tick(void) {
     if (P.phase != PH_SIM) return 1;
     AiCtx *c = &P.ctx;
-    /* one engine sim this tick */
-    Cand *v = &P.pool[P.sim_i];
-    AiSim sim;
-    ai_sim(c->w, c->b, c->n, 0, v->aim, v->power01, 0, v->tip_vert, &sim);
-    v->simmed = 1; v->cue_end = sim.cue_end;
-    v->scratch = sim.cue_potted;
-    /* foul if the cue's first contact is with no ball, or an illegal ball (wrong
-     * group / not on). Hitting a DIFFERENT legal ball first (e.g. another red in
-     * snooker) is fine — it just may not pot the planned target, handled below. */
-    v->bad_first = (sim.first_hit_idx < 0) ||
-                   !cue_rules_ball_legal(c->r, c->b, c->n, c->b[sim.first_hit_idx].id);
-    if (sim.cue_potted) v->posScore = 0;
-    else {
-        int potted_target = !sim.on[P.ti];
-        float ps = position_quality(c, sim.cue_end, P.ti, sim.end_pos);
-        if (!potted_target) ps *= 0.3f;
-        v->posScore = ps;
+    /* several engine sims per tick (cheap coarse-step sims keep the frame live) */
+    for (int s = 0; s < SIMS_PER_TICK && P.sim_i < P.sim_cap; s++) {
+        Cand *v = &P.pool[P.sim_i];
+        AiSim sim;
+        ai_sim(c->w, c->b, c->n, 0, v->aim, v->power01, 0, v->tip_vert, &sim);
+        v->simmed = 1; v->cue_end = sim.cue_end;
+        v->scratch = sim.cue_potted;
+        /* The sim's job is NOT to decide whether the pot drops — that's the
+         * heuristic potScore (cut/distance). The sim exists to (1) avoid in-offs
+         * [scratch], (2) avoid fouls [wrong first ball], and (3) score the LEAVE
+         * for the next shot. So we keep the real cue leave for position and let
+         * persona aim-error decide makes vs misses on execution. */
+        v->bad_first = (sim.first_hit_idx < 0) ||
+                       !cue_rules_ball_legal(c->r, c->b, c->n, c->b[sim.first_hit_idx].id);
+        if (sim.cue_potted) v->posScore = 0;          /* in-off → worthless leave */
+        else v->posScore = position_quality(c, sim.cue_end, P.ti, sim.end_pos);
+        P.sim_i++;
     }
-    if (++P.sim_i >= P.sim_cap) { plan_finalize(); P.phase = PH_DONE; return 1; }
+    if (P.sim_i >= P.sim_cap) { plan_finalize(); P.phase = PH_DONE; return 1; }
     return 0;
 }
 
@@ -860,6 +1000,64 @@ CueAIShot cue_ai_plan(const CueWorld *w, const CueTable *t, const CueRules *r,
     cue_ai_plan_start(w, t, r, balls, n, p, rng);
     while (!cue_ai_plan_tick()) { }
     return cue_ai_plan_result();
+}
+
+/* ---- 9-ball push-out shot ------------------------------------------- */
+/* A push-out carries no obligation to hit the ball-on or a rail, so we simply
+ * roll the cue ball to the resting spot that leaves the OPPONENT the worst shot
+ * on the ball-on. Search a fan of directions × powers, sim each with the real
+ * engine, reject scratches, and minimise the opponent's best pot. */
+CueAIShot cue_ai_pushout(const CueWorld *w, const CueTable *t, const CueRules *r,
+                         const CueBall *balls, int n, const CuePersona *p,
+                         uint32_t *rng) {
+    (void)rng;
+    AiCtx c = { .w = w, .t = t, .r = r, .b = balls, .n = n, .p = p,
+                .S = 12.0f / t->R, .maxdist_m = fmaxf(t->half_len, t->half_wid) * 2.0f,
+                .snooker = t->is_snooker };
+    CueAIShot out; memset(&out, 0, sizeof out);
+    out.safe = 1; out.valid = 1; out.power01 = 0.22f;
+
+    /* the opponent's ball-on after the push = the lowest legal ball */
+    int L = -1;
+    for (int i = 1; i < n; i++)
+        if (balls[i].on && cue_rules_ball_legal(r, balls, n, balls[i].id)) { L = i; break; }
+    /* default: roll gently away from the on-ball (or straight up-table) */
+    Vec3 cue = balls[0].pos;
+    out.aim = (L >= 0) ? atan2f(cue.z - balls[L].pos.z, cue.x - balls[L].pos.x) : 0.0f;
+    if (L < 0) return out;
+
+    /* Aim for a MODERATELY difficult leave, not the toughest one. A push-out is
+     * symmetric: whatever shot we leave, the opponent simply passes it back to us
+     * if it's bad — so leaving the worst shot just hands US the worst shot. The
+     * sweet spot is a contestable medium pot: hard enough the opponent may decline
+     * (and then we face a makeable shot), tempting enough they may take it on and
+     * miss. We never leave a dead/snookered position (forced foul on pass-back). */
+    const float MED = 42.0f;        /* target pot confidence (~0..100; ~85 = hanger) */
+    const float POWS[3] = { 0.22f, 0.38f, 0.55f };
+    float bestMetric = 1e18f; int found = 0;
+    for (int d = 0; d < 12; d++) {
+        float aim = 6.2831853f * (float)d / 12.0f;
+        for (int pi = 0; pi < 3; pi++) {
+            AiSim sim;
+            ai_sim(w, balls, n, 0, aim, POWS[pi], 0.0f, 0.0f, &sim);
+            if (sim.cue_potted) continue;                  /* never scratch on a push-out */
+            /* opponent's best pot on the ball-on from the resulting layout */
+            AiCtx cx = c; cx.b = s_sb;                     /* s_sb holds the settled balls */
+            float opp = -1e9f;
+            if (sim.on[L]) {
+                for (int pk = 0; pk < w->npocket; pk++) {
+                    float bp, bs;
+                    if (eval_pot(&cx, L, pk, &bp, &bs) && bp > opp) opp = bp;
+                }
+            }
+            /* a leave with NO makeable shot is the trap the player warned about —
+             * the opponent passes it straight back and we're stuck. Avoid it. */
+            float metric = (opp < -1e8f) ? 1e6f : fabsf(opp - MED);
+            if (metric < bestMetric) { bestMetric = metric; out.aim = aim; out.power01 = POWS[pi]; found = 1; }
+        }
+    }
+    (void)found;
+    return out;
 }
 
 /* ---- ball-in-hand placement ----------------------------------------- */
@@ -920,4 +1118,13 @@ Vec3 cue_ai_place(const CueWorld *w, const CueTable *t, const CueRules *r,
         if (score > best) { best = score; best_pos = cand; }
     }
     return best_pos;
+}
+
+/* Debug wrapper: object-ball aim point for potting `target` into pocket pk. */
+Vec3 cue_ai_pocket_aim(const CueWorld *w, const CueTable *t, int pk, Vec3 target) {
+    AiCtx c = { .w = w, .t = t, .r = NULL, .b = NULL, .n = 0, .p = NULL,
+                .S = 12.0f / t->R,
+                .maxdist_m = (t->half_len > t->half_wid ? t->half_len : t->half_wid) * 2.0f,
+                .snooker = t->is_snooker };
+    return pocket_aim_t(&c, pk, target);
 }

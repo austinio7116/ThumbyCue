@@ -71,6 +71,26 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->rail = RGB565C(70, 46, 30); t->rail_top = RGB565C(100, 66, 42);
         t->spot = RGB565C(180, 180, 180);
         t->nballs = (kind == CUE_GAME_US9) ? 10 : 16;
+    } else if (kind == CUE_GAME_CN8) {
+        /* Chinese 8-ball: 10 ft table, full-size pool balls (solids/stripes),
+         * but TIGHT ROUNDED ("Chinese template") pockets — closer to English
+         * than American. Rack/break/spots as US 8-ball (foot spot, head string),
+         * rules are WPA 8-ball (no UK two-shot). */
+        t->half_len = 2.84f * 0.5f;
+        t->half_wid = 1.42f * 0.5f;
+        t->R = 0.028575f; t->mass = 0.170f;
+        t->cushion_h = 1.27f * t->R; t->rail_w = 0.080f;
+        t->pocket_round = 1;                 /* rounded jaws, tight */
+        t->pr_corner  = 2.05f * t->R; t->pr_side  = 1.88f * t->R;   /* tighter than UK pub */
+        t->gap_corner = 2.55f * t->R; t->gap_side = 2.42f * t->R;
+        t->facing_len = 1.667f * t->R;
+        t->ang_corner = 45.0f; t->ang_side = 70.0f;
+        t->off_corner = 0.60f * t->R; t->off_side = 1.25f * t->R;
+        t->jaw_r = 0.005f;
+        t->cloth = RGB565C(22, 44, 155);     /* Chinese-8 royal blue cloth */
+        t->rail = RGB565C(78, 48, 28); t->rail_top = RGB565C(112, 70, 36);
+        t->spot = RGB565C(180, 180, 180);
+        t->nballs = 16;
     } else {
         /* Snooker — SNK10 (10 ft, 10 reds) or SNK15 (12 ft, 15 reds). Curved
          * jaws. Layout offsets scale with table length off the 12 ft master. */

@@ -114,6 +114,10 @@ enum {
 };
 int cue_phys_step(CueWorld *w, CueBall *balls, int n, float dt, uint32_t *events);
 
+/* Override the integrator substep (0 = restore the default 2 kHz CUE_H). The AI
+ * uses a coarser step for its headless ranking sims to run ~2x faster. */
+void cue_phys_set_substep(float h);
+
 int cue_phys_moving(const CueWorld *w, const CueBall *balls, int n);
 
 #endif

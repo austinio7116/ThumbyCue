@@ -17,6 +17,7 @@ typedef enum {
     CUE_GAME_UK8 = 0,   /* 7ft,  curved pockets, UK 8-ball */
     CUE_GAME_US8,       /* 9ft,  angled (straight-mitre) pockets, US 8-ball */
     CUE_GAME_US9,       /* 9ft,  angled pockets, US 9-ball */
+    CUE_GAME_CN8,       /* 10ft, tight rounded pockets, Chinese 8-ball (WPA rules) */
     CUE_GAME_SNK10,     /* 10ft, curved pockets, 10-red snooker */
     CUE_GAME_SNK15,     /* 12ft, curved pockets, full snooker */
     CUE_GAME_SNK6,      /* 7ft UK pool table, curved pockets, 6-red snooker */

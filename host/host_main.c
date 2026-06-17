@@ -77,6 +77,17 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < 4; i++) cue_game_tick(&b, 1.0f/60.0f);
             }
         }
+        if (getenv("CUE_AIVSAI")) {              /* title->main->PLAY, set MODE=CPU vs CPU, START */
+            #define TAP(btn) do { b.btn=1; cue_game_tick(&b,1.0f/60.0f); b.btn=0; \
+                                  for(int i=0;i<3;i++) cue_game_tick(&b,1.0f/60.0f); } while(0)
+            TAP(a);                              /* title -> main */
+            TAP(a);                              /* main: PLAY -> SC_PLAY (cursor 0 = GAME) */
+            TAP(down);                           /* GAME -> MODE */
+            TAP(right);                          /* VS CPU -> CPU vs CPU */
+            for (int k = 0; k < 5; k++) TAP(down);  /* MODE -> ... -> START */
+            TAP(a);                              /* START */
+            #undef TAP
+        }
         if (getenv("CUE_OVERHEAD")) {           /* tap LB once to toggle */
             b.lb = 1; cue_game_tick(&b, 1.0f / 60.0f); b.lb = 0;
         }

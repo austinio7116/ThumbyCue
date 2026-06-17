@@ -383,7 +383,16 @@ static void emit_table_markings(const CueTable *t) {
         cloth_disc(t->pink_x,   0.0f,        sr, sc);   /* pink   */
         cloth_disc(t->black_x,  0.0f,        sr, sc);   /* black  */
     } else {
-        cloth_disc(hl * 0.5f, 0.0f, sr, sc);            /* US pool foot spot (rack apex) */
+        cloth_disc(hl * 0.5f, 0.0f, sr, sc);            /* foot spot (rack apex) */
+        /* US-style tables (US 8/9-ball, Chinese 8-ball) break from behind the
+         * head string ("kitchen line") — a line across the bed at -hl/2 with a
+         * head spot. UK8 uses the baulk line + D drawn above instead. */
+        if (t->kind == CUE_GAME_US8 || t->kind == CUE_GAME_US9 ||
+            t->kind == CUE_GAME_CN8) {
+            float hx = -hl * 0.5f;
+            cloth_line(hx, -(hw-R*0.5f), hx, hw-R*0.5f, lw, lc);   /* head string */
+            cloth_disc(hx, 0.0f, sr, sc);                          /* head spot */
+        }
     }
 }
 
