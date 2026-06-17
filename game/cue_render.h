@@ -20,12 +20,13 @@ typedef struct { Vec3 pos; Mat3 basis; float fov_deg; } CueView;
 void cue_render_build_table(const CueTable *t, const CueWorld *w);
 
 /* Per-frame (core0): project everything for the given view. balls[0..n).
- * aim_active draws the cue stick + aiming line from the cue ball along
- * aim_dir (unit world X–Z); ghost shows the contact ghost-ball ring.
- * power 0..1 pulls the cue back. */
+ * aim_active draws the cue stick from the cue ball along aim_dir (unit world
+ * X–Z). aim_level selects the aiming assist: 0 = none (cue only), 1 = aim
+ * line, 2 = + ghost ball, 3 = + object-ball line. power 0..1 pulls the cue
+ * back. */
 void cue_render_build(const CueView *v, const CueBall *balls, int n,
                       int aim_active, int aim_ball, Vec3 aim_dir,
-                      float power, int show_ghost);
+                      float power, int aim_level);
 
 /* Rasterise rows [y0,y1) into fb (logical 128-space rows). Safe to call
  * concurrently on disjoint bands from both cores. */

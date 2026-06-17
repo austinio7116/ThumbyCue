@@ -654,7 +654,7 @@ static void add_stri(Vec3 a, Vec3 b, Vec3 c, Vec3 nrm, uint16_t base) {
 
 void cue_render_build(const CueView *v, const CueBall *balls, int n,
                       int aim_active, int aim_ball, Vec3 aim_dir,
-                      float power, int show_ghost) {
+                      float power, int aim_level) {
     s_view = *v;
     s_focal = 64.0f / tanf(v->fov_deg * (3.14159265f / 180.0f) * 0.5f);
 
@@ -707,56 +707,64 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
         Vec3 cuepos = balls[aim_ball].pos;
         Vec3 dir = v3_norm(v3(aim_dir.x, 0, aim_dir.z));
         const float twoR = 2.0f * s_ballR;
-        /* nearest ball the cue ball actually contacts along the ray: solve for
-         * the travel distance s where centre separation = 2R. */
-        float bests = 1e9f; int hit = -1;
-        for (int i = 0; i < n; i++) {
-            if (i == aim_ball || !balls[i].on) continue;
-            Vec3 d = v3_sub(balls[i].pos, cuepos); d.y = 0;
-            float along = v3_dot(d, dir);
-            if (along <= 0) continue;
-            float perp2 = (d.x * d.x + d.z * d.z) - along * along;
-            if (perp2 < twoR * twoR) {
-                float s = along - sqrtf(twoR * twoR - perp2);
-                if (s > 0 && s < bests) { bests = s; hit = i; }
-            }
-        }
-        float linelen = (hit >= 0) ? bests : 1.4f;
-        float step = s_ballR * 2.2f;
-        int ndots = (int)(linelen / step);
-        if (ndots > MAX_DOTS) ndots = MAX_DOTS;
-        for (int k = 1; k <= ndots; k++) {
-            Vec3 wp = v3(cuepos.x + dir.x * (k * step), s_ballR,
-                         cuepos.z + dir.z * (k * step));
-            float dx, dy; uint16_t dd;
-            if (cue_render_project(wp, &dx, &dy, &dd) && s_ndot < MAX_DOTS) {
-                s_dot[s_ndot].x = dx; s_dot[s_ndot].y = dy; s_dot[s_ndot].d = dd;
-                s_ndot++;
-            }
-        }
-        if (hit >= 0) {
-            /* ghost-ball: cue centre at contact = cuepos + dir*bests. */
-            Vec3 ghost = v3(cuepos.x + dir.x * bests, s_ballR, cuepos.z + dir.z * bests);
-            /* object ball departs along the line of centres ghost→object. */
-            Vec3 odir = v3_norm(v3(balls[hit].pos.x - ghost.x, 0,
-                                   balls[hit].pos.z - ghost.z));
-            for (int k = 1; k <= 10; k++) {
-                Vec3 wp = v3(balls[hit].pos.x + odir.x * (k * step), s_ballR,
-                             balls[hit].pos.z + odir.z * (k * step));
-                float dx, dy; uint16_t dd;
-                if (cue_render_project(wp, &dx, &dy, &dd) && s_nodot < MAX_DOTS) {
-                    s_odot[s_nodot].x = dx; s_odot[s_nodot].y = dy;
-                    s_odot[s_nodot].d = dd; s_nodot++;
+        const float step = s_ballR * 2.2f;
+        int hit = -1;
+        /* Aiming assist by difficulty level:
+         *   1 = aim line, 2 = + ghost ball, 3 = + object-ball line.
+         * Level 0 shows only the cue stick (drawn below, always). */
+        if (aim_level >= 1) {
+            /* nearest ball the cue ball actually contacts along the ray: solve
+             * for the travel distance s where centre separation = 2R. */
+            float bests = 1e9f;
+            for (int i = 0; i < n; i++) {
+                if (i == aim_ball || !balls[i].on) continue;
+                Vec3 d = v3_sub(balls[i].pos, cuepos); d.y = 0;
+                float along = v3_dot(d, dir);
+                if (along <= 0) continue;
+                float perp2 = (d.x * d.x + d.z * d.z) - along * along;
+                if (perp2 < twoR * twoR) {
+                    float s = along - sqrtf(twoR * twoR - perp2);
+                    if (s > 0 && s < bests) { bests = s; hit = i; }
                 }
             }
-            if (show_ghost) {
-                float gx, gy, gvz;
-                if (project_z(ghost, &gx, &gy, &gvz)) {
-                    s_ghost.cx = gx; s_ghost.cy = gy;
-                    s_ghost.rad = s_focal * s_ballR / gvz;
-                    uint16_t dd; float t1, t2;
-                    cue_render_project(ghost, &t1, &t2, &dd);
-                    s_ghost.d = dd; s_ghost.on = 1;
+            float linelen = (hit >= 0) ? bests : 1.4f;
+            int ndots = (int)(linelen / step);
+            if (ndots > MAX_DOTS) ndots = MAX_DOTS;
+            for (int k = 1; k <= ndots; k++) {
+                Vec3 wp = v3(cuepos.x + dir.x * (k * step), s_ballR,
+                             cuepos.z + dir.z * (k * step));
+                float dx, dy; uint16_t dd;
+                if (cue_render_project(wp, &dx, &dy, &dd) && s_ndot < MAX_DOTS) {
+                    s_dot[s_ndot].x = dx; s_dot[s_ndot].y = dy; s_dot[s_ndot].d = dd;
+                    s_ndot++;
+                }
+            }
+            if (hit >= 0) {
+                /* ghost-ball: cue centre at contact = cuepos + dir*bests. */
+                Vec3 ghost = v3(cuepos.x + dir.x * bests, s_ballR, cuepos.z + dir.z * bests);
+                if (aim_level >= 3) {
+                    /* object ball departs along the line of centres ghost→object. */
+                    Vec3 odir = v3_norm(v3(balls[hit].pos.x - ghost.x, 0,
+                                           balls[hit].pos.z - ghost.z));
+                    for (int k = 1; k <= 10; k++) {
+                        Vec3 wp = v3(balls[hit].pos.x + odir.x * (k * step), s_ballR,
+                                     balls[hit].pos.z + odir.z * (k * step));
+                        float dx, dy; uint16_t dd;
+                        if (cue_render_project(wp, &dx, &dy, &dd) && s_nodot < MAX_DOTS) {
+                            s_odot[s_nodot].x = dx; s_odot[s_nodot].y = dy;
+                            s_odot[s_nodot].d = dd; s_nodot++;
+                        }
+                    }
+                }
+                if (aim_level >= 2) {
+                    float gx, gy, gvz;
+                    if (project_z(ghost, &gx, &gy, &gvz)) {
+                        s_ghost.cx = gx; s_ghost.cy = gy;
+                        s_ghost.rad = s_focal * s_ballR / gvz;
+                        uint16_t dd; float t1, t2;
+                        cue_render_project(ghost, &t1, &t2, &dd);
+                        s_ghost.d = dd; s_ghost.on = 1;
+                    }
                 }
             }
         }
@@ -793,7 +801,7 @@ void cue_render_build(const CueView *v, const CueBall *balls, int n,
 /* ---- ball sets --------------------------------------------------------- */
 /* 0 = PRO (per-number coloured solids/stripes), 1 = UK yellow/blue solids,
  * 2 = UK yellow/red solids, 3 = US "dyna" (yellow solids / maroon stripes). */
-void cue_render_set_ball_set(int s) { s_ball_set = (s < 0 || s > 4) ? 0 : s; }
+void cue_render_set_ball_set(int s) { s_ball_set = (s < 0 || s > 7) ? 0 : s; }
 
 /* the standard pro per-number hues for ids 1..7 (9..15 reuse 1..7's hue) */
 static const uint16_t k_prohue[8] = {
@@ -813,10 +821,46 @@ static const uint16_t k_ptourhue[8] = {
     0, RGB565C(245,180,0),  RGB565C(0,55,237),  RGB565C(255,30,0),
     RGB565C(255,71,123),    RGB565C(154,46,255), RGB565C(0,227,155),
     RGB565C(128,50,11) };
-/* striped sets: 0 PRO (per-number), 3 dyna (maroon), 4 pro-tournament. */
-static int set_striped(void) { return s_ball_set == 0 || s_ball_set == 3 || s_ball_set == 4; }
+/* SPACE per-number palette (2dpool "Space" ballColors). */
+static const uint16_t k_spacehue[8] = {
+    0, RGB565C(255,215,0),  RGB565C(0,0,205),   RGB565C(255,0,0),
+    RGB565C(75,0,130),      RGB565C(255,140,0), RGB565C(0,100,0),
+    RGB565C(128,0,0) };
+/* VINTAGE per-number palette (2dpool "Vintage" ballColors — muted gold/orange). */
+static const uint16_t k_vintagehue[8] = {
+    0, RGB565C(184,135,0),  RGB565C(0,0,205),   RGB565C(255,0,0),
+    RGB565C(75,0,130),      RGB565C(255,115,0), RGB565C(0,100,0),
+    RGB565C(128,0,0) };
+/* per-set "pole"/stripe-background colour for striped balls 9..15. */
+#define BALL_GREY  RGB565C(148,143,143)   /* SPACE poles */
+#define BALL_CREAM RGB565C(255,233,153)   /* VINTAGE poles */
+#define BALL_PINK  RGB565C(255,0,221)     /* HOT PINK group2 */
+#define BALL_INK   RGB565C(19,16,16)      /* HOT PINK group1 */
+static uint16_t stripe_bg(void) {
+    switch (s_ball_set) {
+        case 4: return BALL_BLACK;   /* pro tournament — black poles */
+        case 6: return BALL_GREY;    /* space */
+        case 7: return BALL_CREAM;   /* vintage */
+        default: return BALL_WHITE;  /* PRO / dyna */
+    }
+}
+/* striped, numbered sets: 0 PRO, 3 dyna, 4 pro-tour, 6 space, 7 vintage. */
+static int set_striped(void) {
+    return s_ball_set==0||s_ball_set==3||s_ball_set==4||s_ball_set==6||s_ball_set==7;
+}
+/* numbered sets (show the number circle / digit). */
+static int set_numbered(void) {
+    return s_ball_set==0||s_ball_set==3||s_ball_set==4||s_ball_set==6||s_ball_set==7;
+}
 /* hue for the current set's ball id 1..7 (used by solids and stripes). */
-static uint16_t set_hue(uint8_t i) { return (s_ball_set == 4) ? k_ptourhue[i] : k_prohue[i]; }
+static uint16_t set_hue(uint8_t i) {
+    switch (s_ball_set) {
+        case 4: return k_ptourhue[i];
+        case 6: return k_spacehue[i];
+        case 7: return k_vintagehue[i];
+        default: return k_prohue[i];
+    }
+}
 
 /* ---- ball texture ------------------------------------------------------ */
 static uint16_t ball_base(uint8_t id) {
@@ -830,15 +874,14 @@ static uint16_t ball_base(uint8_t id) {
         case CUE_ID_BLACK:  return RGB565C(20, 20, 22);
     }
     if (s_is_snooker) return RGB565C(190, 30, 30);          /* reds 1..15 */
-    if (id == 8) return BALL_BLACK;
+    if (id == 8) return (s_ball_set == 5) ? RGB565C(158,158,158) : BALL_BLACK;
     switch (s_ball_set) {
         case 1: return (id <= 7) ? BALL_YELLOW : BALL_BLUE;    /* UK yellow/blue */
         case 2: return (id <= 7) ? BALL_YELLOW : BALL_RED;     /* UK yellow/red  */
-        case 3: return (id <= 7) ? BALL_GOLD   : BALL_WHITE;   /* pro league: gold / maroon-on-white */
-        case 4: return (id <= 7) ? k_ptourhue[id] : BALL_BLACK; /* pro tour: per-num / band-on-black */
-        default:                                               /* PRO */
-            if (id >= 1 && id <= 7) return k_prohue[id];
-            return BALL_WHITE;                                 /* 9-15 white striped body */
+        case 5: return (id <= 7) ? BALL_INK    : BALL_PINK;    /* hot pink: ink solids / pink */
+        case 3: return (id <= 7) ? BALL_GOLD   : stripe_bg();  /* pro league: gold / maroon-on-white */
+        default:                                               /* PRO / tour / space / vintage */
+            return (id <= 7) ? set_hue(id) : stripe_bg();      /* per-num solids / striped poles */
     }
 }
 /* 3x5 digit glyphs, packed top row first, 3 bits/row (MSB = left column). */
@@ -907,11 +950,11 @@ static uint16_t ball_sample(uint8_t id, Vec3 nb, uint16_t base) {
     if (id == CUE_ID_CUE) {
         float ax = fabsf(nb.x), ay = fabsf(nb.y), az = fabsf(nb.z);
         float m = ax > ay ? (ax > az ? ax : az) : (ay > az ? ay : az);
-        if (m > 0.965f) return RGB565C(150, 70, 60);  /* small, muted pole dots */
+        if (m > 0.965f) return RGB565C(198, 58, 46);  /* small red pole dots — vibrant but not garish */
         return base;
     }
     if (s_is_snooker) return base;              /* snooker balls are unmarked */
-    int us = (s_ball_set == 0 || s_ball_set == 3 || s_ball_set == 4);  /* numbered sets */
+    int us = set_numbered();
     if (id >= 9 && id <= 15) {
         float half = (s_ball_set == 4) ? 0.55f : 0.42f;   /* pro-tour wider band */
         if (set_striped() && fabsf(nb.y) < half) {
@@ -1258,15 +1301,25 @@ void cue_render_spin_ball(uint16_t *fb, int cx, int cy, int rad,
 void cue_render_set_preview(uint16_t *fb, int cx, int cy, int rad,
                             int ballset, int snooker) {
     int sb = s_ball_set, ss = s_is_snooker;
-    s_ball_set = (ballset < 0 || ballset > 4) ? 0 : ballset;
+    s_ball_set = (ballset < 0 || ballset > 7) ? 0 : ballset;
     s_is_snooker = snooker;
-    /* Two solids (palette), two stripes (stripe style) and the 8 so sets that
-     * share a ball or two still read differently. Snooker shows its colours. */
-    uint8_t ids_pool[5] = { 1, 3, 9, 11, 8 };
-    uint8_t ids_snk[5]  = { 1, CUE_ID_YELLOW, CUE_ID_GREEN, CUE_ID_BLUE, CUE_ID_BLACK };
-    const uint8_t *ids = snooker ? ids_snk : ids_pool;
-    int n = 5, gap = rad * 2 + 4;
-    for (int i = 0; i < n; i++)
-        draw_ball_icon(fb, cx + (int)((i - (n - 1) * 0.5f) * gap), cy, rad, ids[i], 1);
+    /* A small 6-ball triangle rack (rows of 1/2/3). Mixed solids + stripes so
+     * each set reads clearly, with the BLACK (8) in the centre of the base row
+     * (the rack's centre line). Snooker shows reds + colours instead. */
+    /* distinct hues (per-number sets): yellow,blue,red,purple,green + black; idx4
+     * is the rack centre. Mix of solids (1,3,6) and stripes (10,12). */
+    static const uint8_t rack_pool[6] = { 1, 10, 3, 12, 8, 6 };
+    static const uint8_t rack_snk[6]  = { 1, CUE_ID_YELLOW, CUE_ID_GREEN,
+                                          CUE_ID_BROWN, CUE_ID_BLACK, CUE_ID_BLUE };
+    const uint8_t *ids = snooker ? rack_snk : rack_pool;
+    float dx = rad * 2.0f, dy = rad * 1.78f;
+    int idx = 0;
+    for (int row = 0; row < 3; row++) {
+        float ry = cy + (row - 1) * dy;
+        for (int j = 0; j <= row; j++) {
+            float rx = cx + (j - row * 0.5f) * dx;
+            draw_ball_icon(fb, (int)(rx + 0.5f), (int)(ry + 0.5f), rad, ids[idx++], 1);
+        }
+    }
     s_ball_set = sb; s_is_snooker = ss;
 }

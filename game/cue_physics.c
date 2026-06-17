@@ -74,6 +74,10 @@ void cue_phys_strike(const CueWorld *w, CueBall *b, Vec3 dir, float speed,
     cue_phys_strike_elev(w, b, dir, speed, tip_side, tip_vert, 0.0f);
 }
 
+/* loudest cushion-approach (normal) speed seen during the current cue_phys_step,
+ * so the cushion SFX scales with the actual rail impact, not the whole table. */
+static float s_cush_vn;
+
 /* ---- per-ball cloth-contact evolution for one substep ------------------ */
 static void ball_cloth(const CueWorld *w, CueBall *b, float h) {
     const float R = w->R, g = w->g;
@@ -281,9 +285,11 @@ static int collide_cushions(const CueWorld *w, CueBall *b, uint32_t *ev) {
     if (best >= 0) {
         b->pos = v3_add(b->pos, v3_scale(best_sep, best_pen));   /* push out along separation */
         Vec3 N = v3_norm(v3(best_n.x * ct, st, best_n.z * ct));  /* bounce off smooth normal */
+        float vn = -(b->vel.x * N.x + b->vel.z * N.z);           /* approach speed into rail */
         if (collide_surface(w, b, N, w->e_cush, w->mu_cush)) {
             hit = 1;
             if (ev) *ev |= CUE_EV_CUSHION;
+            if (vn > s_cush_vn) s_cush_vn = vn;                  /* loudest rail impact this step */
         }
     }
     /* Jaw tip circles (immovable) — rattle in the pocket mouths. */
@@ -414,8 +420,11 @@ int cue_phys_moving(const CueWorld *w, const CueBall *balls, int n) {
 static float g_sub_h = CUE_H;
 void cue_phys_set_substep(float h) { g_sub_h = (h > 0.0f) ? h : CUE_H; }
 
+float cue_phys_cushion_impact(void) { return s_cush_vn; }
+
 int cue_phys_step(CueWorld *w, CueBall *balls, int n, float dt, uint32_t *events) {
     if (events) *events = 0;
+    s_cush_vn = 0.0f;                  /* reset the cushion-impact meter for this step */
     float h = g_sub_h;
     w->_acc += dt;
     int iters = 0;

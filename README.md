@@ -40,33 +40,52 @@ the balls bounce off are guaranteed identical.
 
 ### Ball sets
 
-Every game racks with its own balls — the pool sets (PRO numbered, UK yellow/blue
-and yellow/red, Dynasphere, Pro-Tour) are picked in the PLAY menu:
+Every game racks with its own balls, and the eight pool sets — PRO numbered, UK
+yellow/blue and yellow/red, Dynasphere, Pro-Tour, Hot Pink, Space and Vintage —
+are picked in the PLAY menu:
 
 <p align="center">
-<img src="docs/img/rack-uk8-yb.png"      width="180" alt="UK 8-ball — yellow / blue">
-<img src="docs/img/rack-uk8-yr.png"      width="180" alt="UK 8-ball — yellow / red">
-<img src="docs/img/rack-us8-pro.png"     width="180" alt="US 8-ball — PRO numbered solids & stripes">
-<img src="docs/img/rack-us8-dyna.png"    width="180" alt="US 8-ball — Dynasphere set">
+<img src="docs/img/rack-us8-pro.png"     width="180" alt="PRO numbered solids & stripes">
+<img src="docs/img/rack-us8-dyna.png"    width="180" alt="Dynasphere set">
+<img src="docs/img/rack-us8-protour.png" width="180" alt="Pro-Tour set">
+<img src="docs/img/rack-us8-space.png"   width="180" alt="Space set">
 </p>
 <p align="center">
-<img src="docs/img/rack-us8-protour.png" width="180" alt="US 8-ball — Pro-Tour set">
+<img src="docs/img/rack-us8-vintage.png" width="180" alt="Vintage set">
+<img src="docs/img/rack-us8-hotpink.png" width="180" alt="Hot Pink set">
+<img src="docs/img/rack-uk8-yb.png"      width="180" alt="UK 8-ball — yellow / blue">
+<img src="docs/img/rack-uk8-yr.png"      width="180" alt="UK 8-ball — yellow / red">
+</p>
+<p align="center">
 <img src="docs/img/rack-9ball.png"       width="180" alt="US 9-ball diamond rack">
-<img src="docs/img/rack-cn8.png"         width="180" alt="Chinese 8-ball on blue cloth">
+<img src="docs/img/rack-cn8.png"         width="180" alt="Chinese 8-ball">
 <img src="docs/img/rack-snooker.png"     width="180" alt="Snooker — red triangle and colours">
 </p>
 
-### Felt colours
+### Table colours
 
-Pool tables can be played on any of five cloths (snooker is always tournament green):
+The **TABLE** screen in the PLAY menu sets the cloth and the frame/rail wood live
+on the table for the game you've picked — any of these on any table (snooker
+included). The default green is a true championship green.
+
+Felt — Green, Blue, Teal, Red, Claret, Purple, Slate, Tan, Navy, Black:
 
 <p align="center">
-<img src="docs/img/felt-green.png"  width="150" alt="Green felt">
-<img src="docs/img/felt-teal.png"   width="150" alt="Teal felt">
-<img src="docs/img/felt-blue.png"   width="150" alt="Blue felt">
-<img src="docs/img/felt-claret.png" width="150" alt="Claret felt">
-<img src="docs/img/felt-slate.png"  width="150" alt="Slate felt">
+<img src="docs/img/felt-green.png"  width="120" alt="Green felt">
+<img src="docs/img/felt-blue.png"   width="120" alt="Blue felt">
+<img src="docs/img/felt-teal.png"   width="120" alt="Teal felt">
+<img src="docs/img/felt-red.png"    width="120" alt="Red felt">
+<img src="docs/img/felt-claret.png" width="120" alt="Claret felt">
 </p>
+<p align="center">
+<img src="docs/img/felt-purple.png" width="120" alt="Purple felt">
+<img src="docs/img/felt-slate.png"  width="120" alt="Slate felt">
+<img src="docs/img/felt-tan.png"    width="120" alt="Tan felt">
+<img src="docs/img/felt-navy.png"   width="120" alt="Navy felt">
+<img src="docs/img/felt-black.png"  width="120" alt="Black felt">
+</p>
+
+Frame/rail woods: Walnut, Oak, Mahogany, Wenge, Ebony, Charcoal, Silver.
 
 ---
 
@@ -147,18 +166,20 @@ breaks properly.
 Eight personas span a wide skill range — each with its own aim accuracy, power
 control, spin ability, positional awareness, safety bias and shot selection:
 
-| Persona | ELO | Style |
-|---------|-----|-------|
-| Rookie Rick | 1278 | Wild, random shot choice |
-| Steady Sue | 1382 | Cautious, plays position |
-| Hustler Hank | 1447 | Aggressive potter |
-| Professor Pete | 1428 | Methodical, strong safety |
-| Clara "Cue Queen" | 1501 | All-round |
-| Deadshot Dave | 1633 | Fearless long potter |
-| Iron Nina | 1715 | Near-flawless |
-| The Machine | — | Perfect aim & position |
+| | Persona | ELO | Style |
+|---|---------|-----|-------|
+| <img src="docs/img/face-rick.png"    width="56"> | Rookie Rick | 1278 | Wild, random shot choice |
+| <img src="docs/img/face-sue.png"     width="56"> | Steady Sue | 1382 | Cautious, plays position |
+| <img src="docs/img/face-hank.png"    width="56"> | Hustler Hank | 1447 | Aggressive potter |
+| <img src="docs/img/face-pete.png"    width="56"> | Professor Pete | 1428 | Methodical, strong safety |
+| <img src="docs/img/face-clara.png"   width="56"> | Clara "Cue Queen" | 1501 | All-round |
+| <img src="docs/img/face-dave.png"    width="56"> | Deadshot Dave | 1633 | Fearless long potter |
+| <img src="docs/img/face-nina.png"    width="56"> | Iron Nina | 1715 | Near-flawless |
+| <img src="docs/img/face-machine.png" width="56"> | The Machine | — | Perfect aim & position |
 
-Pick your opponent (or **Player 2**) and the match length on the Play screen.
+Each opponent shows their portrait in the PLAY menu when selected and while
+they're at the table. Pick your opponent (or **Player 2**) and the match length
+on the Play screen.
 
 <img src="docs/img/menu.png" width="320" alt="Play menu — opponent and match length">
 
@@ -200,6 +221,11 @@ balls down the side — there when you need it, out of the way when you don't.
 | Ball-in-hand | d-pad to move · **RB** to orbit · **A** to place |
 | Pause / menu | **MENU** |
 | Freeview during a shot | **A** |
+
+**Aiming aid** — OPTIONS sets the difficulty: **None** (cue only), **Aim line**,
+**+ Ghost ball**, or **Full** lines (with the object-ball's path). **Power** uses
+a curve, so a small draw-back gives delicate control for roll-ups and safeties
+while a full draw still reaches a break.
 
 On the SDL host: `W A S D` = d-pad, `.` = A, `,` = B, `Left-Shift` = LB,
 `Space` = RB, `Enter` = Menu.

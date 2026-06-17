@@ -57,6 +57,52 @@ int main(int argc, char **argv) {
     else if (!getenv("CUE_MENU")) cue_game_set_kind(snooker);   /* CUE_MENU: stay on title */
     if (getenv("CUE_BALLSET"))   cue_game_set_ballset(atoi(getenv("CUE_BALLSET")));
     if (getenv("CUE_CLOTH"))     cue_game_set_cloth(atoi(getenv("CUE_CLOTH")));
+    if (getenv("CUE_FRAME"))     cue_game_set_frame(atoi(getenv("CUE_FRAME")));
+    if (getenv("CUE_AIM"))       cue_game_set_aim(atoi(getenv("CUE_AIM")));
+
+    /* Headless video capture: run a configured CPU-vs-CPU match, dump one PPM
+     * per frame (30 fps) into $CUE_VIDEO. Config via CUE_MODE/CUE_P1/CUE_P2/
+     * CUE_CLOTH/CUE_FRAME/CUE_BALLSET/CUE_BO, count via CUE_VFRAMES. */
+    const char *vid = getenv("CUE_VIDEO");
+    if (vid) {
+        int g  = getenv("CUE_MODE")    ? atoi(getenv("CUE_MODE"))    : 0;
+        int p1 = getenv("CUE_P1")      ? atoi(getenv("CUE_P1"))      : 0;
+        int p2 = getenv("CUE_P2")      ? atoi(getenv("CUE_P2"))      : 7;
+        int cl = getenv("CUE_CLOTH")   ? atoi(getenv("CUE_CLOTH"))   : 0;
+        int fr = getenv("CUE_FRAME")   ? atoi(getenv("CUE_FRAME"))   : 0;
+        int bs = getenv("CUE_BALLSET") ? atoi(getenv("CUE_BALLSET")) : 0;
+        int bo = getenv("CUE_BO")      ? atoi(getenv("CUE_BO"))      : 1;
+        int nf   = getenv("CUE_VFRAMES") ? atoi(getenv("CUE_VFRAMES")) : 600;
+        cue_audio_init();
+        cue_audio_set_volume(16);
+        cue_game_start_demo(g, p1, p2, cl, fr, bs, bo);
+        int skip = getenv("CUE_VSKIP") ? atoi(getenv("CUE_VSKIP")) : 5;
+        CraftRawButtons b; memset(&b, 0, sizeof b);
+        /* Play through the break + several shots BEFORE recording so the capture
+         * opens mid-frame (table well developed), then start on a clean CPU
+         * "thinking" view. A shot is counted each time play leaves the thinking
+         * state (a strike). Then record video + frame-synced audio (735/frame). */
+        int played = 0, wasT = cue_game_demo_thinking();
+        for (int f = 0; f < 6000 && played < skip; f++) {
+            cue_game_tick(&b, 1.0f/30.0f);
+            int nowT = cue_game_demo_thinking();
+            if (wasT && !nowT) played++;          /* a shot was just struck */
+            wasT = nowT;
+        }
+        for (int f = 0; f < 1200 && !cue_game_demo_thinking(); f++) cue_game_tick(&b, 1.0f/30.0f);
+        char apath[512]; snprintf(apath, sizeof apath, "%s/audio.raw", vid);
+        FILE *aw = fopen(apath, "wb");
+        for (int f = 0; f < nf; f++) {
+            cue_game_tick(&b, 1.0f / 30.0f);
+            if (aw) { int16_t ab[735]; cue_audio_render(ab, 735); fwrite(ab, 2, 735, aw); }
+            render_frame();
+            char path[512]; snprintf(path, sizeof path, "%s/f%05d.ppm", vid, f);
+            dump_ppm(path);
+        }
+        if (aw) fclose(aw);
+        printf("video: wrote %d frames to %s\n", nf, vid);
+        return 0;
+    }
 
     const char *shot = getenv("CUE_SHOT");
     if (shot) {
@@ -72,6 +118,21 @@ int main(int argc, char **argv) {
         if (lm) cue_render_set_light_mode(atoi(lm));
         if (getenv("CUE_BALLTEST")) cue_game_debug_spread();
         if (getenv("CUE_NUMTEST"))  cue_game_debug_numbers();
+        if (getenv("CUE_MAINMENU")) {            /* title -> main menu */
+            b.a = 1; cue_game_tick(&b, 1.0f/60.0f); b.a = 0;
+            for (int i = 0; i < 4; i++) cue_game_tick(&b, 1.0f/60.0f);
+        }
+        if (getenv("CUE_TABLEMENU")) {           /* title -> main -> PLAY -> TABLE editor */
+            #define TAP(btn) do { b.btn=1; cue_game_tick(&b,1.0f/60.0f); b.btn=0; \
+                                  for(int i=0;i<3;i++) cue_game_tick(&b,1.0f/60.0f); } while(0)
+            TAP(a);                              /* title -> main (PLAY) */
+            TAP(a);                              /* enter PLAY (GAME) */
+            TAP(down); TAP(down); TAP(down); TAP(down);  /* GAME->MODE->CPU->BALLS->TABLE */
+            TAP(a);                              /* open the TABLE editor */
+            int frame = getenv("CUE_TBLFRAME") ? atoi(getenv("CUE_TBLFRAME")) : 0;
+            if (frame) { TAP(down); for (int k=0;k<frame;k++) TAP(right); }  /* to FRAME, cycle */
+            #undef TAP
+        }
         if (getenv("CUE_PLAYMENU")) {            /* title -> main -> PLAY menu */
             for (int t = 0; t < 2; t++) {
                 b.a = 1; cue_game_tick(&b, 1.0f/60.0f); b.a = 0;

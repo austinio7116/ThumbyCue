@@ -12,13 +12,21 @@
  * Per voice: noise × decaying excitation → 1–2 RBJ band-pass biquads. Inner
  * loop is a handful of multiply-adds — cheap enough for the device.
  *
- * EXCEPTION — the ball-on-ball CLACK is a real embedded SAMPLE (cue_clack_pcm.h,
- * the 2dpool ball-hit recording, ~8 KB). The synth couldn't reproduce its body +
- * resonant ring; a sample voice plays it back with per-hit amplitude and a tiny
- * pitch wobble for variety.
+ * EXCEPTION — the cue STRIKE, ball-on-ball CLACK, rail CUSHION and POCKET are
+ * real embedded SAMPLES from 2dpool (cue_cueshot/clack/cushion/pot/softpot/
+ * hardpot_pcm.h). Most are decoded recordings; the cushion is a faithful render
+ * of 2dpool's playRailCollision 3-layer synth. The pocket follows playPocket():
+ * pool uses pot.mp3, snooker splits soft/hard at ~4 m/s (softpot/hardpot.mp3).
+ * Sample voices play them back with per-hit amplitude and a tiny pitch wobble.
+ * Only UI stays procedural synth.
  */
 #include "cue_audio.h"
 #include "cue_clack_pcm.h"
+#include "cue_cueshot_pcm.h"    /* real 2dpool cue-tip strike sample */
+#include "cue_cushion_pcm.h"    /* 2dpool playRailCollision render */
+#include "cue_pot_pcm.h"        /* 2dpool pool pocket (pot.mp3) */
+#include "cue_softpot_pcm.h"    /* 2dpool snooker soft pot (softpot.mp3) */
+#include "cue_hardpot_pcm.h"    /* 2dpool snooker hard pot (hardpot.mp3) */
 #include <math.h>
 #include <string.h>
 
@@ -40,21 +48,10 @@ typedef struct {
                           * brightness. low = dark (pot), high = bright (strike) */
 } SfxModel;
 
-/* STRIKE — cue tip: bright, short, noisy click (centroid ~5.7 kHz, ~32 ms). */
-static const SfxModel M_STRIKE  = { 2, {4200, 7200}, {1.6f, 2.0f}, {1.0f, 0.7f},
-    0.028f, 0.6f, 1.5f, 0.85f };
-/* CLACK is now a real embedded sample (cue_clack_pcm.h), not a synth model. */
-/* CUSHION — duller, lower, rubbery thud. */
-static const SfxModel M_CUSHION = { 2, {750, 1300}, {3.0f, 2.5f}, {1.0f, 0.5f},
-    0.045f, 0.12f, 1.7f, 0.22f };
-/* POT — "tock + rumble": a crisp woody mid knock the small speaker can actually
- * render (780/1500 Hz, fast click attack) layered over a low rolling tail (the
- * ball settling, 360/620 Hz, ~180 ms). Two voices fired together. The old dark
- * 260–500 Hz thunk vanished into mud on the device speaker. */
-static const SfxModel M_POT_TOCK   = { 2, {780, 1500}, {2.2f, 2.6f}, {1.0f, 0.55f},
-    0.045f, 0.45f, 1.7f, 0.62f };
-static const SfxModel M_POT_RUMBLE = { 2, {360, 620}, {4.0f, 3.0f}, {1.0f, 0.5f},
-    0.180f, 0.02f, 1.4f, 0.18f };
+/* STRIKE, CLACK and CUSHION are now real embedded samples from 2dpool
+ * (cue_cueshot_pcm.h, cue_clack_pcm.h, cue_cushion_pcm.h) rather than synth
+ * models — the synth couldn't match the recordings' body/character. */
+/* POT is now real 2dpool samples (cue_pot/softpot/hardpot_pcm.h). */
 /* UI — a clean short blip (this one IS tonal, on purpose). */
 static const SfxModel M_UI      = { 1, {1000, 0}, {30.0f, 0}, {1.0f, 0},
     0.060f, 0.0f, 1.2f, 1.0f };
@@ -77,8 +74,10 @@ typedef struct {
 static Voice s_v[NVOICE];
 static float s_gain = 0.7f;
 static uint32_t s_rng = 0x1234567u;
+static int s_snooker = 0;       /* picks the snooker pot samples over the pool one */
 
 void cue_audio_init(void) { memset(s_v, 0, sizeof s_v); }
+void cue_audio_set_snooker(int on) { s_snooker = on ? 1 : 0; }
 void cue_audio_set_volume(int vol) {
     if (vol < 0) vol = 0; if (vol > 20) vol = 20;
     s_gain = (float)vol / 20.0f * 0.9f;
@@ -138,7 +137,12 @@ void cue_audio_sfx(int which, float in) {
     if (in < 0) in = 0; if (in > 1) in = 1;
     float level = 0.35f + 0.65f * in;
     switch (which) {
-    case CUE_SFX_STRIKE:  trigger(&M_STRIKE,  level); break;
+    case CUE_SFX_STRIKE: {
+        /* real 2dpool cue-tip sample; gain tracks power like 2dpool's
+         * playCueStrike (volume = 0.4 + power*0.6). */
+        float gain = (0.4f + 0.6f * in) * 0.9f;
+        trigger_sample(cue_cueshot_pcm, CUE_CUESHOT_PCM_LEN, gain, 1.0f);
+        break; }
     case CUE_SFX_CLACK: {
         /* real recorded clack; tiny per-hit pitch wobble (±2%) for variety —
          * NOT a real speed-up (natural pitch sounded best). */
@@ -146,8 +150,28 @@ void cue_audio_sfx(int which, float in) {
         float rate = 0.98f + 0.04f * ((s_rng >> 16 & 0xFF) * (1.0f / 255.0f));
         trigger_sample(cue_clack_pcm, CUE_CLACK_LEN, level * 1.25f, rate);
         break; }
-    case CUE_SFX_CUSHION: trigger(&M_CUSHION, level); break;
-    case CUE_SFX_POT:     trigger(&M_POT_TOCK, level); trigger(&M_POT_RUMBLE, level * 0.9f); break;
+    case CUE_SFX_CUSHION: {
+        /* 2dpool playRailCollision render; gain scales with impact intensity,
+         * tiny per-hit pitch wobble (±3%) so repeated rail hits vary. */
+        s_rng = s_rng * 1664525u + 1013904223u;
+        float rate = 0.97f + 0.06f * ((s_rng >> 16 & 0xFF) * (1.0f / 255.0f));
+        trigger_sample(cue_cushion_pcm, CUE_CUSHION_PCM_LEN, level * 0.70f, rate);  /* -30%: cushions were too loud */
+        break; }
+    case CUE_SFX_POT: {
+        /* real 2dpool pocket samples, selected like playPocket(). The pot
+         * intensity `in` = 0.2 + 0.7*hit_i (hit_i = vmax/4.675 m/s), so the
+         * snooker 4 m/s hard/soft split lands at in ~= 0.8. */
+        if (s_snooker) {
+            if (in > 0.8f) {              /* hard pot: 0.5 + excess, like 2dpool */
+                float gain = 0.5f + (in - 0.8f) / 0.2f * 0.3f;   /* 0.5 .. 0.8 */
+                trigger_sample(cue_hardpot_pcm, CUE_HARDPOT_LEN, gain, 1.0f);
+            } else {                       /* soft pot: naturally quieter */
+                trigger_sample(cue_softpot_pcm, CUE_SOFTPOT_LEN, 0.6f, 1.0f);
+            }
+        } else {                           /* pool: single pot sample at ~0.8 */
+            trigger_sample(cue_pot_pcm, CUE_POT_LEN, 0.55f + 0.35f * in, 1.0f);
+        }
+        break; }
     default:              trigger(&M_UI, 0.8f); break;
     }
 }

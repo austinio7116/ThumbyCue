@@ -922,7 +922,12 @@ void cue_ai_plan_start(const CueWorld *w, const CueTable *t, const CueRules *r,
             float spinY = SPIN_LEVELS[si];
             if (fabsf(spinY) > maxspin + 0.001f) continue;
             float eff = cbp;
-            if (spinY < -0.05f) eff *= 1.0f + 0.20f * fminf(1.0f, fabsf(spinY));
+            /* Draw compensation (2dpool ai.js): backspin makes the cue ball
+             * slide longer under high kinetic friction, bleeding forward pace
+             * before it reaches the object — so a draw shot needs MORE power to
+             * pot. (+spinY = draw.) The original boosts draw, not follow; the
+             * earlier port had this sign inverted, which underhit every draw. */
+            if (spinY > 0.05f) eff *= 1.0f + 0.20f * fminf(1.0f, fabsf(spinY));
             float potScore = potting_difficulty(c, cue, target, pk) - (eff/50.0f)*15.0f*powPenScale;
             if (!is_corner(c, pk) && eff > 30.0f) potScore -= 15.0f;
             /* tight (snooker / rounded) pockets reject pace — a ball hit too hard

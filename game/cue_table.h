@@ -18,14 +18,16 @@ typedef enum {
     CUE_GAME_US8,       /* 9ft,  angled (straight-mitre) pockets, US 8-ball */
     CUE_GAME_US9,       /* 9ft,  angled pockets, US 9-ball */
     CUE_GAME_CN8,       /* 10ft, tight rounded pockets, Chinese 8-ball (WPA rules) */
-    CUE_GAME_SNK10,     /* 10ft, curved pockets, 10-red snooker */
     CUE_GAME_SNK15,     /* 12ft, curved pockets, full snooker */
+    CUE_GAME_SNK10,     /* 10ft, curved pockets, 10-red snooker */
     CUE_GAME_SNK6,      /* 7ft UK pool table, curved pockets, 6-red snooker */
     CUE_GAME_COUNT
 } CueGameKind;
 /* legacy coarse aliases (kept so existing call sites read cleanly) */
 #define CUE_GAME_POOL    CUE_GAME_UK8
 #define CUE_GAME_SNOOKER CUE_GAME_SNK15
+/* first snooker variant in enum order — everything >= this is snooker */
+#define CUE_GAME_FIRST_SNK CUE_GAME_SNK15
 
 /* Ball id conventions (shared by physics, render, rules).
  * Pool:    0 = cue, 1..7 solids, 8 = black, 9..15 stripes.

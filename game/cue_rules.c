@@ -52,9 +52,10 @@ void cue_rules_init(CueRules *r, const CueTable *t, int cpu) {
         r->spot[5] = v3(t->blue_x,  t->R, 0.0f);           /* blue   */
         r->spot[6] = v3(t->pink_x,  t->R, 0.0f);           /* pink   */
         r->spot[7] = v3(t->black_x, t->R, 0.0f);           /* black  */
-    } else if (t->kind == CUE_GAME_US9) {
-        r->spot[0] = v3(t->half_len * 0.5f, t->R, 0.0f);   /* foot spot — 9 respot */
-        r->seq = 1;                                        /* lowest ball on (HUD) */
+    } else {
+        /* foot spot — respot for the 9 (US9) or an illegally broken-in 8 */
+        r->spot[0] = v3(t->half_len * 0.5f, t->R, 0.0f);
+        if (t->kind == CUE_GAME_US9) r->seq = 1;           /* lowest ball on (HUD) */
     }
 }
 
@@ -68,10 +69,16 @@ static CueBall *find_ball(CueBall *b, int n, int id) {
     for (int i = 0; i < n; i++) if (b[i].id == id) return &b[i];
     return NULL;
 }
-/* re-spot the 8 (illegally potted on the break). */
-static void respot_eight(CueBall *b, int n) {
+/* re-spot the 8 (illegally potted on the break). Must move it back to the
+ * foot spot — otherwise it's resurrected underground in the pocket (on=1 but
+ * invisible), where the asleep-ball skip leaves it forever and the frame can
+ * never end. Mirrors respot_colour. */
+static void respot_eight(CueRules *r, CueBall *b, int n) {
     CueBall *q = find_ball(b, n, 8);
-    if (q) { q->on = 1; q->vel = v3(0,0,0); q->w = v3(0,0,0); }
+    if (!q) return;
+    q->on = 1; q->vel = v3(0,0,0); q->w = v3(0,0,0); q->drop = 0.0f;
+    q->pos = r->spot[0];           /* foot spot (occupancy not checked) */
+    q->orient = m3_identity();
 }
 static void respot_colour(CueRules *r, CueBall *b, int n, int id) {
     CueBall *q = find_ball(b, n, id);
@@ -113,7 +120,7 @@ static void resolve_pool(CueRules *r, CueBall *b, int n, int first_hit,
     /* the 8 */
     if (eight) {
         if (r->break_shot) {                       /* re-spot, no result */
-            respot_eight(b, n);
+            respot_eight(r, b, n);
         } else {
             /* legal win only if the group was clear BEFORE potting the 8 */
             int win = !foul && !scratch && on_eight;

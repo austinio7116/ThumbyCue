@@ -12,6 +12,7 @@
 #include "cue_ai.h"
 #include "cue_audio.h"
 #include "craft_font.h"
+#include "cue_faces.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -25,27 +26,50 @@ enum { SC_TITLE = 0, SC_MAIN, SC_PLAY, SC_OPTIONS, SC_CUSTOM, SC_GAME, SC_PAUSE,
 enum { GS_AIM = 0, GS_BACKSWING, GS_SHOOTING, GS_PLACE, GS_DECIDE };
 
 /* ---- options / settings ---------------------------------------------- */
-static const uint16_t k_cloth[5] = {
-    RGB565C(22,120,70), RGB565C(20,100,78), RGB565C(30,70,150),
-    RGB565C(120,30,40), RGB565C(60,60,68),
+#define CUE_NCLOTH 10
+static const uint16_t k_cloth[CUE_NCLOTH] = {
+    RGB565C(4,135,21),    /* GREEN  — classic championship green */
+    RGB565C(18,72,140),   /* BLUE   — tournament blue */
+    RGB565C(20,110,92),   /* TEAL */
+    RGB565C(150,24,30),   /* RED */
+    RGB565C(120,30,50),   /* CLARET */
+    RGB565C(82,42,132),   /* PURPLE */
+    RGB565C(112,120,132), /* SLATE — lighter slate-grey (was too dark) */
+    RGB565C(150,112,58),  /* TAN */
+    RGB565C(22,30,92),     /* NAVY */
+    RGB565C(26,26,30),    /* BLACK */
 };
-static const char *k_cloth_name[5] = { "GREEN","TEAL","BLUE","CLARET","SLATE" };
+static const char *k_cloth_name[CUE_NCLOTH] = {
+    "GREEN","BLUE","TEAL","RED","CLARET","PURPLE","SLATE","TAN","NAVY","BLACK" };
+
+/* Frame / rail wood — browns through blacks & greys. Each entry is the side
+ * (shadowed) rail colour plus the lit top edge. */
+#define CUE_NFRAME 7
+static const uint16_t k_frame_rail[CUE_NFRAME] = {
+    RGB565C(96,54,26),   RGB565C(150,110,60), RGB565C(110,40,30), RGB565C(64,38,22),
+    RGB565C(28,26,28),   RGB565C(60,62,68),   RGB565C(120,124,130) };
+static const uint16_t k_frame_top[CUE_NFRAME] = {
+    RGB565C(128,78,38),  RGB565C(185,145,90), RGB565C(145,65,45), RGB565C(94,58,36),
+    RGB565C(54,50,52),   RGB565C(96,98,104),  RGB565C(168,171,178) };
+static const char *k_frame_name[CUE_NFRAME] = {
+    "WALNUT","OAK","MAHOGANY","WENGE","EBONY","CHARCOAL","SILVER" };
+static int s_frame_idx;
 
 static int s_kind;            /* CueGameKind: 0 UK8, 1 US8, 2 US9, 3 CN8, 4 SNK10... */
 static const char *k_mode_name[CUE_GAME_COUNT] = {
     "UK 8-BALL", "US 8-BALL", "US 9-BALL", "CHINESE 8",
-    "SNOOKER 10", "SNOOKER 15", "SNOOKER 6" };
+    "SNOOKER 15", "SNOOKER 10", "SNOOKER 6" };
 static int s_opp_mode = 1;    /* 0 = 2 PLAYER, 1 = VS CPU, 2 = CPU vs CPU */
 static int s_cloth_idx;
-static int s_ballset;          /* 0 PRO, 1 UK Y/B, 2 UK Y/R, 3 dyna, 4 pro-tour */
-#define CUE_NBALLSET 5
+static int s_ballset;          /* see k_ballset_name */
+#define CUE_NBALLSET 8
 static const char *k_ballset_name[CUE_NBALLSET] = {
-    "PRO", "UK Y/B", "UK Y/R", "DYNA", "PRO TOUR" };
-/* 9-ball needs every ball distinguishable, so only sets with a full per-number
- * colour range are valid: PRO (0) and PRO TOUR (4). The 2-colour grouped sets
- * (UK Y/B, UK Y/R, DYNA) are excluded for US9. */
+    "PRO", "UK Y/B", "UK Y/R", "DYNA", "PRO TOUR", "HOT PINK", "SPACE", "VINTAGE" };
+/* 9-ball needs every ball distinguishable, so only fully per-number sets are
+ * valid: PRO (0), PRO TOUR (4), SPACE (6), VINTAGE (7). The grouped 2-colour
+ * sets (UK Y/B, UK Y/R, DYNA, HOT PINK) are excluded for US9. */
 static int ballset_ok(int mode, int set) {
-    if (mode == CUE_GAME_US9) return set == 0 || set == 4;
+    if (mode == CUE_GAME_US9) return set == 0 || set == 4 || set == 6 || set == 7;
     return 1;
 }
 static int next_ballset(int mode, int set, int dir) {
@@ -61,6 +85,10 @@ static int default_ballset(int mode) {
     return 0;                                  /* US9 / others → pro */
 }
 static int s_vol = 14;        /* 0..20 */
+/* aiming assist difficulty: 0 none, 1 aim line, 2 + ghost ball, 3 full lines */
+static int s_aim_level = 3;
+#define CUE_NAIM 4
+static const char *k_aim_name[CUE_NAIM] = { "NONE", "AIM LINE", "+ GHOST", "FULL" };
 
 /* ---- world / table --------------------------------------------------- */
 static CueTable  s_table;
@@ -83,6 +111,11 @@ static Vec3  s_orbit_c;            /* frozen camera-orbit centre (freeview) */
 static int   s_freeview;          /* shot cam: 0 = follow cue ball, 1 = free-roam */
 static int   s_follow_idx;         /* ball the shot-cam tracks: 0 = cue, else the struck object ball */
 static float s_power, s_tip_side, s_tip_vert;
+static float s_pull;              /* raw backswing draw 0..1 (linear); s_power = pull^gamma */
+/* Power curve: the backswing draw is linear, but delivered speed = draw^gamma.
+ * That stretches the soft end of the bar (fine control for snooker roll-ups) and
+ * steepens the top (a full draw still gives a full-power break). */
+#define POWER_GAMMA 2.5f
 static float s_elev;              /* cue elevation (rad) for swerve/masse */
 static int   s_place_restrict;     /* 1 = confine placement to the D / head string */
 static int   s_inhand_avail;       /* ball-in-hand not yet used this shot → can re-place */
@@ -139,15 +172,16 @@ static const char *player_tag(int p) {
 /* PLAY-screen rows are dynamic: the persona row(s) only appear for the modes
  * that have CPU players. Both input and render build the same list so the
  * cursor maps consistently. */
-enum { ROW_GAME, ROW_MODE, ROW_CPU1, ROW_CPU2, ROW_BALLS, ROW_FRAMES, ROW_START };
+enum { ROW_GAME, ROW_MODE, ROW_CPU1, ROW_CPU2, ROW_BALLS, ROW_TABLE, ROW_FRAMES, ROW_START };
 static int play_rows(int *rows) {
     int n = 0;
     rows[n++] = ROW_GAME;
+    rows[n++] = ROW_FRAMES;   /* match length sits with the game choice */
     rows[n++] = ROW_MODE;
     if (s_opp_mode == 2)      { rows[n++] = ROW_CPU1; rows[n++] = ROW_CPU2; }
     else if (s_opp_mode == 1) { rows[n++] = ROW_CPU2; }   /* the single CPU is player 1 */
-    rows[n++] = ROW_BALLS;
-    rows[n++] = ROW_FRAMES;
+    rows[n++] = ROW_BALLS;    /* ball set — updates the preview */
+    rows[n++] = ROW_TABLE;    /* opens the live felt / frame editor */
     rows[n++] = ROW_START;
     return n;
 }
@@ -178,7 +212,10 @@ static const char *pause_label(int act) {
 /* ---- table / game setup ---------------------------------------------- */
 static void rack(void) {
     cue_table_init(&s_table, (CueGameKind)s_kind);
-    if (!s_table.is_snooker) s_table.cloth = k_cloth[s_cloth_idx];  /* pool felt choice */
+    s_table.cloth = k_cloth[s_cloth_idx];          /* felt choice (all tables) */
+    s_table.rail = k_frame_rail[s_frame_idx];      /* frame / rail wood choice */
+    s_table.rail_top = k_frame_top[s_frame_idx];
+    cue_audio_set_snooker(s_table.is_snooker);   /* snooker vs pool pocket sound */
     cue_render_set_ball_set(s_ballset);
     cue_table_build_world(&s_table, &s_world);
     s_n = cue_table_rack(&s_table, s_balls);
@@ -194,7 +231,7 @@ static void new_frame(void) {
      * place it (in the D for snooker/UK8, behind the head string for US). */
     s_balls[0].pos = cue_table_cue_home(&s_table);
     s_state = GS_PLACE; s_place_restrict = 1; s_inhand_avail = 1;
-    s_aim = 0; s_view_az = 0; s_power = 0; s_tip_side = s_tip_vert = 0; s_elev = 0;
+    s_aim = 0; s_view_az = 0; s_power = 0; s_pull = 0; s_tip_side = s_tip_vert = 0; s_elev = 0;
     s_freelook = 0;
 }
 /* Start a fresh match: reset frame tally, coin-flip the first breaker. */
@@ -598,9 +635,10 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
                        : (0.16f + 1.14f * (s_aim_hold>0.7f?1.0f:(s_aim_hold/0.7f)*(s_aim_hold/0.7f)));
             s_aim += adir * rate * dt;
             if (s_state == GS_BACKSWING) {
-                if (b->down) s_power += 0.85f*dt;
-                if (b->up)   s_power -= 0.85f*dt;
-                if (s_power<0) s_power=0; if (s_power>1) s_power=1;
+                if (b->down) s_pull += 0.85f*dt;
+                if (b->up)   s_pull -= 0.85f*dt;
+                if (s_pull<0) s_pull=0; if (s_pull>1) s_pull=1;
+                s_power = powf(s_pull, POWER_GAMMA);   /* delivered power = draw^gamma */
             } else if (b->rb) {               /* hold RB + UP/DOWN = zoom (at current pitch) */
                 if (b->up)   s_cam_dist_z += 0.6f*dt;
                 if (b->down) s_cam_dist_z -= 0.6f*dt;
@@ -617,10 +655,10 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
     }
 
     if (s_state == GS_AIM) {
-        if (b->a) { s_state = GS_BACKSWING; s_power = 0; }
+        if (b->a) { s_state = GS_BACKSWING; s_power = 0; s_pull = 0; }
     } else if (s_state == GS_BACKSWING) {
         if (jr_a) {
-            if (s_power > 0.04f) begin_shot();
+            if (s_power > 0.008f) begin_shot();   /* allow very gentle roll-ups */
             else s_state = GS_AIM;
         }
     } else if (s_state == GS_SHOOTING) {
@@ -654,7 +692,13 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
         uint32_t ev = 0;
         int moving = cue_phys_step(&s_world, s_balls, s_n, dt, &ev);
         if (ev & CUE_EV_BALL_HIT) cue_audio_sfx(CUE_SFX_CLACK, 0.25f + 0.75f*hit_i);
-        if (ev & CUE_EV_CUSHION)  { cue_audio_sfx(CUE_SFX_CUSHION, 0.2f + 0.7f*hit_i); s_cushion_seen = 1; }
+        if (ev & CUE_EV_CUSHION)  {
+            /* scale by the ACTUAL rail-approach speed, not the table's fastest ball,
+             * so a soft cushion kiss during a power shot stays quiet. */
+            float ci = cue_phys_cushion_impact() / (MAX_STRIKE_SPEED * 0.55f);
+            if (ci > 1.0f) ci = 1.0f;
+            cue_audio_sfx(CUE_SFX_CUSHION, 0.12f + 0.78f*ci); s_cushion_seen = 1;
+        }
         if (ev & CUE_EV_POCKET)   cue_audio_sfx(CUE_SFX_POT, 0.2f + 0.7f*hit_i);
         /* the cue ball's true first object-ball contact, recorded by the physics */
         s_first_hit = s_world.first_hit;
@@ -676,7 +720,7 @@ static void ingame_tick(const CraftRawButtons *b, float dt) {
                 if (s_was_on[i] && !s_balls[i].on) potted[np++] = s_balls[i].id;
             cue_rules_resolve(&s_rules, s_balls, s_n, &s_world,
                               s_first_hit, cue_scratch, s_cushion_seen, potted, np);
-            s_power = 0; s_tip_side = s_tip_vert = 0; s_elev = 0; s_aim = s_view_az;
+            s_power = 0; s_pull = 0; s_tip_side = s_tip_vert = 0; s_elev = 0; s_aim = s_view_az;
             s_msg_t = 2.0f;
             route_post_shot();
         }
@@ -702,14 +746,13 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         if (jp(b->a, s_prev.a)) { s_screen = SC_MAIN; s_cursor = 0; }
         break;
     case SC_MAIN: {
-        int sel = menu_move(b, 3);
-        if (sel == 0) { s_screen = SC_PLAY; s_cursor = 0; }
+        int sel = menu_move(b, 2);
+        if (sel == 0) { s_screen = SC_PLAY; s_cursor = 0; rack(); }  /* bg = current game */
         else if (sel == 1) { s_screen = SC_OPTIONS; s_cursor = 0; }
-        else if (sel == 2) { s_screen = SC_CUSTOM; s_cursor = 0; }
         break; }
     case SC_PLAY: {
         static const int bo_opts[4] = { 1, 3, 5, 7 };
-        int rows[7]; int nr = play_rows(rows);
+        int rows[8]; int nr = play_rows(rows);
         if (s_cursor >= nr) s_cursor = nr - 1;
         menu_move(b, nr);
         int row = rows[s_cursor];
@@ -717,7 +760,8 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         switch (row) {
         case ROW_GAME:
             if (lr) { s_kind = (s_kind + (lr>0?1:CUE_GAME_COUNT-1)) % CUE_GAME_COUNT;
-                      s_ballset = default_ballset(s_kind); }
+                      s_ballset = default_ballset(s_kind);
+                      rack(); }                  /* update the background table render */
             break;
         case ROW_MODE:
             if (lr) s_opp_mode = (s_opp_mode + (lr>0?1:2)) % 3;
@@ -729,7 +773,12 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
             if (lr) s_persona_p[1] = (s_persona_p[1] + (lr>0?1:CUE_NUM_PERSONAS-1)) % CUE_NUM_PERSONAS;
             break;
         case ROW_BALLS:
-            if (lr) s_ballset = next_ballset(s_kind, s_ballset, lr>0?1:-1);
+            if (lr) { s_ballset = next_ballset(s_kind, s_ballset, lr>0?1:-1);
+                      cue_render_set_ball_set(s_ballset); }   /* updates the preview */
+            break;
+        case ROW_TABLE:
+            /* open the live felt/frame editor on THIS game's table */
+            if (jp(b->a, s_prev.a)) { rack(); s_screen = SC_CUSTOM; s_cursor = 0; }
             break;
         case ROW_FRAMES:
             if (lr) { int bi = 0; for (int k=0;k<4;k++) if (bo_opts[k]==s_match_bo) bi=k;
@@ -745,14 +794,15 @@ void cue_game_tick(const CraftRawButtons *b, float dt) {
         menu_move(b, 2);
         int lr = (jp(b->right,s_prev.right)?1:0) - (jp(b->left,s_prev.left)?1:0);
         if (s_cursor == 0 && lr) { s_vol += lr; if(s_vol<0)s_vol=0; if(s_vol>20)s_vol=20; cue_audio_set_volume(s_vol); }
-        if (s_cursor == 1 && lr) { s_cloth_idx = (s_cloth_idx + 5 + lr) % 5; }
+        if (s_cursor == 1 && lr) { s_aim_level = (s_aim_level + CUE_NAIM + lr) % CUE_NAIM; }
         if (jp(b->b, s_prev.b)) { s_screen = SC_MAIN; s_cursor = 0; }
         break; }
-    case SC_CUSTOM: {
-        menu_move(b, 1);
+    case SC_CUSTOM: {   /* TABLE — pick felt + frame over the live table */
+        menu_move(b, 2);
         int lr = (jp(b->right,s_prev.right)?1:0) - (jp(b->left,s_prev.left)?1:0);
-        if (s_cursor == 0 && lr) s_cloth_idx = (s_cloth_idx + 5 + lr) % 5;
-        if (jp(b->b, s_prev.b)) { s_screen = SC_MAIN; s_cursor = 0; }
+        if (s_cursor == 0 && lr) { s_cloth_idx = (s_cloth_idx + CUE_NCLOTH + lr) % CUE_NCLOTH; rack(); }
+        else if (s_cursor == 1 && lr) { s_frame_idx = (s_frame_idx + CUE_NFRAME + lr) % CUE_NFRAME; rack(); }
+        if (jp(b->b, s_prev.b)) { s_screen = SC_PLAY; s_cursor = 0; }
         break; }
     case SC_GAME:
         if (jp(b->menu, s_prev.menu)) { s_screen = SC_PAUSE; s_cursor = 0; }
@@ -796,7 +846,38 @@ void cue_game_debug_cam(float ex,float ey,float ez,float tx,float ty,float tz,fl
 void cue_game_set_ballset(int s){ s_ballset = (s<0||s>=CUE_NBALLSET)?0:s; cue_render_set_ball_set(s_ballset); }
 /* Set the felt colour (0..4: GREEN/TEAL/BLUE/CLARET/SLATE) and re-rack so it
  * applies (pool only — snooker is always green). Debug/screenshot hook. */
-void cue_game_set_cloth(int idx){ s_cloth_idx = (idx<0||idx>=5)?0:idx; rack(); }
+void cue_game_set_cloth(int idx){ s_cloth_idx = (idx<0||idx>=CUE_NCLOTH)?0:idx; rack(); }
+void cue_game_set_frame(int idx){ s_frame_idx = (idx<0||idx>=CUE_NFRAME)?0:idx; rack(); }
+void cue_game_set_aim(int lvl){ s_aim_level = (lvl<0||lvl>=CUE_NAIM)?3:lvl; }
+
+/* Demo/video helper: true when a CPU is about to think with the balls at rest —
+ * a clean point to begin a capture (the orbiting "thinking" view), not mid-rally. */
+int cue_game_demo_thinking(void) {
+    if (s_screen != SC_GAME || s_state != GS_AIM || !cur_is_cpu()) return 0;
+    for (int i = 0; i < s_n; i++) {
+        if (!s_balls[i].on) continue;
+        Vec3 v = s_balls[i].vel;
+        if (v.x*v.x + v.z*v.z > 1e-5f) return 0;   /* something still rolling */
+    }
+    return 1;
+}
+
+/* Set up and immediately start a CPU-vs-CPU match (for the demo/video harness). */
+void cue_game_start_demo(int mode, int p1, int p2, int cloth, int frame,
+                         int ballset, int bo) {
+    if (mode < 0) mode = 0; if (mode >= CUE_GAME_COUNT) mode = CUE_GAME_COUNT-1;
+    s_kind = mode;
+    s_opp_mode = 2;                                       /* CPU vs CPU */
+    s_persona_p[0] = (p1<0||p1>=CUE_NUM_PERSONAS) ? 0 : p1;
+    s_persona_p[1] = (p2<0||p2>=CUE_NUM_PERSONAS) ? 0 : p2;
+    s_cloth_idx = (cloth<0||cloth>=CUE_NCLOTH) ? 0 : cloth;
+    s_frame_idx = (frame<0||frame>=CUE_NFRAME) ? 0 : frame;
+    s_ballset   = ballset;
+    if (!ballset_ok(s_kind, s_ballset)) s_ballset = default_ballset(s_kind);
+    s_match_bo  = (bo < 1) ? 1 : bo;
+    new_match();
+    s_screen = SC_GAME;
+}
 /* Debug: lay balls 1..15 in a 5x3 grid, number patch (+x) facing the camera. */
 void cue_game_debug_numbers(void) {
     s_kind = CUE_GAME_UK8; rack(); memset(s_balls,0,sizeof s_balls);
@@ -909,11 +990,36 @@ void cue_game_render_begin(void) {
     if (cur_is_cpu() && s_state == GS_AIM && !s_freelook && s_settle_t < 0.0f) aiming = 0;
     float pw = (s_state==GS_BACKSWING) ? s_power : 0.0f;
     cue_render_set_cue_tip(s_tip_side, s_tip_vert, fmaxf(s_elev, min_cue_elev(s_aim)));
-    cue_render_build(&v, s_balls, s_n, aiming, 0, dir, pw, aiming);
+    /* aiming assist only for a human at the cue; the CPU gets cue stick only */
+    int alvl = (aiming && !cur_is_cpu()) ? s_aim_level : 0;
+    cue_render_build(&v, s_balls, s_n, aiming, 0, dir, pw, alvl);
 }
 void cue_game_render(uint16_t *fb, int y0, int y1) { cue_render_raster(fb, y0, y1); }
 
 /* ---- HUD / menus ----------------------------------------------------- */
+/* Alpha-blended persona avatar blit. sz selects the embedded face size. */
+static void blit_face(uint16_t *fb, int idx, int x, int y, int sz) {
+    if (idx < 0 || idx >= CUE_NUM_FACES) return;
+    const uint16_t *rgb; const uint8_t *al; int w;
+    if (sz >= 32) { rgb = cue_face32_rgb[idx]; al = cue_face32_a[idx]; w = CUE_FACE32_W; }
+    else          { rgb = cue_face24_rgb[idx]; al = cue_face24_a[idx]; w = CUE_FACE24_W; }
+    for (int yy = 0; yy < w; yy++) {
+        int sy = y + yy; if (sy < 0 || sy >= CUE_FB_H) continue;
+        for (int xx = 0; xx < w; xx++) {
+            int sx = x + xx; if (sx < 0 || sx >= CUE_FB_W) continue;
+            int a = al[yy*w + xx]; if (a < 8) continue;
+            int di = sy*CUE_FB_W + sx; uint16_t s = rgb[yy*w + xx];
+            if (a >= 248) { fb[di] = s; continue; }
+            uint16_t d = fb[di];                 /* blend src over fb by alpha */
+            int sr = (s>>11)&0x1F, sg = (s>>5)&0x3F, sb = s&0x1F;
+            int dr = (d>>11)&0x1F, dg = (d>>5)&0x3F, db = d&0x1F;
+            int r = dr + (((sr-dr)*a) >> 8);
+            int g = dg + (((sg-dg)*a) >> 8);
+            int b = db + (((sb-db)*a) >> 8);
+            fb[di] = (uint16_t)((r<<11)|(g<<5)|b);
+        }
+    }
+}
 static void center(uint16_t *fb, const char *s, int y, uint16_t c) {
     int w = craft_font_width(s); craft_font_draw(fb, s, 64 - w/2, y, c);
 }
@@ -974,28 +1080,25 @@ void cue_game_draw_overlay(uint16_t *fb) {
     case SC_MAIN: {
         dim(fb, 8);
         center(fb, "THUMBYCUE", 16, RGB565C(255,240,200));
-        const char *it[3] = { "PLAY", "OPTIONS", "TABLE" };
-        menu_list(fb, it, 3, s_cursor, 50);
+        menu_row(fb, "PLAY",    NULL, 54, s_cursor==0);
+        menu_row(fb, "OPTIONS", NULL, 70, s_cursor==1);
         break; }
     case SC_PLAY: {
         dim(fb, 8);
-        center(fb, "PLAY", 9, RGB565C(255,240,200));
-        int rows[7]; int nr = play_rows(rows);
-        int snk = (s_kind >= CUE_GAME_SNK10);   /* derive from menu mode, not stale table */
-        int sel_persona = -1, balls_sel = 0;
+        center(fb, "PLAY", 4, RGB565C(255,240,200));
+        int rows[8]; int nr = play_rows(rows);
+        int snk = (s_kind >= CUE_GAME_FIRST_SNK);   /* derive from menu mode, not stale table */
         for (int i = 0; i < nr; i++) {
-            int y = 22 + i*10, sel = (i == s_cursor);
+            int y = 15 + i*10, sel = (i == s_cursor);   /* high enough that 8 rows clear the avatars */
             char vb[24];
             switch (rows[i]) {
             case ROW_GAME:  menu_row(fb, "GAME", k_mode_name[s_kind], y, sel); break;
             case ROW_MODE:  menu_row(fb, "MODE",
                                 s_opp_mode==0?"2 PLAYER":s_opp_mode==1?"VS CPU":"CPU vs CPU", y, sel); break;
-            case ROW_CPU1:  menu_row(fb, "CPU 1", CUE_PERSONAS[s_persona_p[0]].name, y, sel);
-                            if (sel) sel_persona = s_persona_p[0]; break;
-            case ROW_CPU2:  menu_row(fb, s_opp_mode==2?"CPU 2":"CPU", CUE_PERSONAS[s_persona_p[1]].name, y, sel);
-                            if (sel) sel_persona = s_persona_p[1]; break;
-            case ROW_BALLS: menu_row(fb, "BALLS", snk?"SNOOKER":k_ballset_name[s_ballset], y, sel);
-                            balls_sel = sel; break;
+            case ROW_CPU1:  menu_row(fb, "CPU 1", CUE_PERSONAS[s_persona_p[0]].name, y, sel); break;
+            case ROW_CPU2:  menu_row(fb, s_opp_mode==2?"CPU 2":"CPU", CUE_PERSONAS[s_persona_p[1]].name, y, sel); break;
+            case ROW_BALLS: menu_row(fb, "BALLS", snk?"SNOOKER":k_ballset_name[s_ballset], y, sel); break;
+            case ROW_TABLE: menu_row(fb, "TABLE", NULL, y, sel); break;   /* opens the editor */
             case ROW_FRAMES:
                 if (s_match_bo == 1) snprintf(vb,sizeof vb,"SINGLE");
                 else                 snprintf(vb,sizeof vb,"BEST OF %d", s_match_bo);
@@ -1003,28 +1106,35 @@ void cue_game_draw_overlay(uint16_t *fb) {
             case ROW_START: menu_row(fb, "START", NULL, y, sel); break;
             }
         }
-        /* context widget below the list: persona ELO, or the ball-set preview */
-        if (sel_persona >= 0) {
-            char ebuf[20]; snprintf(ebuf,sizeof ebuf,"ELO %d", CUE_PERSONAS[sel_persona].elo);
-            center(fb, ebuf, 100, RGB565C(150,200,150));
-        } else if (balls_sel || s_cursor == nr - 1) {
-            cue_render_set_preview(fb, 64, 102, 6, s_ballset, snk);
+        /* opponent avatar(s) in the bottom corners when CPU players are selected */
+        if (s_opp_mode == 2) {
+            blit_face(fb, s_persona_p[0], 2, 94, 32);
+            blit_face(fb, s_persona_p[1], 95, 94, 32);
+        } else if (s_opp_mode == 1) {
+            blit_face(fb, s_persona_p[1], 2, 94, 32);
         }
-        center(fb, "B BACK", 117, RGB565C(150,150,160));
+        /* ball-set preview — big 6-ball triangle rack, centred between the corner
+         * avatars (clears the left-aligned START row and the right-aligned values). */
+        cue_render_set_preview(fb, 64, 98, 7, s_ballset, snk);
+        center(fb, "B BACK", 121, RGB565C(150,150,160));
         break; }
     case SC_OPTIONS: {
         dim(fb, 8);
         center(fb, "OPTIONS", 14, RGB565C(255,240,200));
         char vbuf[8]; snprintf(vbuf,sizeof vbuf,"%d", s_vol);
-        menu_row(fb, "VOLUME", vbuf, 52, s_cursor==0);
-        menu_row(fb, "FELT", k_cloth_name[s_cloth_idx], 63, s_cursor==1);
+        menu_row(fb, "VOLUME", vbuf, 50, s_cursor==0);
+        menu_row(fb, "AIM",    k_aim_name[s_aim_level], 62, s_cursor==1);
         center(fb, "B BACK", 116, RGB565C(150,150,160));
         break; }
     case SC_CUSTOM: {
-        dim(fb, 8);
-        center(fb, "TABLE", 14, RGB565C(255,240,200));
-        menu_row(fb, "FELT", k_cloth_name[s_cloth_idx], 58, s_cursor==0);
-        center(fb, "B BACK", 116, RGB565C(150,150,160));
+        /* No full-screen dim — the table shows live at full brightness so the
+         * felt + frame colours read true. Only thin strips behind the selectors
+         * and the hint are darkened for legibility. */
+        band(fb, 0, 27, 5);
+        band(fb, 115, 128, 5);
+        menu_row(fb, "FELT",  k_cloth_name[s_cloth_idx], 4,  s_cursor==0);
+        menu_row(fb, "FRAME", k_frame_name[s_frame_idx], 15, s_cursor==1);
+        center(fb, "B BACK", 118, RGB565C(170,180,190));
         break; }
     case SC_PAUSE: {
         dim(fb, 7);
@@ -1108,13 +1218,14 @@ void cue_game_draw_overlay(uint16_t *fb) {
             /* extra line (no band): just the current break */
             if (s_rules.brk > 0) { snprintf(buf,sizeof buf,"BREAK %d", s_rules.brk);
                                    center(fb, buf, 14, RGB565C(255,210,120)); }
-            /* points remaining on the table (bottom-left) */
+            /* points remaining on the table — top-right on the BREAK line, clear
+             * of the bottom-left persona avatar */
             int rem;
             if (s_rules.reds_left > 0) rem = s_rules.reds_left * 8 + 27;
             else { rem = 0; for (int i = 0; i < s_n; i++)
                        if (s_balls[i].on && s_balls[i].id >= CUE_ID_YELLOW) rem += (s_balls[i].id - 18); }
             snprintf(buf,sizeof buf,"REM %d", rem);
-            craft_font_draw(fb, buf, 4, 101, RGB565C(165,200,170));
+            rtext(fb, buf, 124, 14, RGB565C(165,200,170));
         } else if (pool8 && s_rules.open) {
             center(fb, "TABLE OPEN", 14, RGB565C(210,215,225));
         } else if (pool8 && s_rules.shots_remaining > 1) {
@@ -1136,6 +1247,10 @@ void cue_game_draw_overlay(uint16_t *fb) {
             }
         }
         int cpu_thinking = (cur_is_cpu() && s_state == GS_AIM);
+        /* persona avatar bottom-left through the whole CPU turn (think + shot) */
+        if (cur_is_cpu() && (s_state == GS_AIM || s_state == GS_BACKSWING ||
+                             s_state == GS_SHOOTING))
+            blit_face(fb, cur_persona(), 2, 94, 32);
         if (s_state == GS_DECIDE) {
             char ob[44];
             if (s_decide_type == 0) {

@@ -14,8 +14,13 @@ void cue_game_init(uint32_t seed);
 void cue_game_set_lobby_cb(void (*cb)(void));
 void cue_game_set_kind(int snooker);          /* 0 = pool, 1 = snooker */
 void cue_game_set_mode(int mode);             /* CueGameKind 0..4 */
-void cue_game_set_ballset(int s);             /* 0..4 ball appearance */
-void cue_game_set_cloth(int idx);             /* 0..4 felt colour (pool tables) */
+void cue_game_set_ballset(int s);             /* ball appearance set */
+void cue_game_set_cloth(int idx);             /* felt colour (pool tables) */
+void cue_game_set_frame(int idx);             /* frame / rail wood colour */
+void cue_game_set_aim(int lvl);               /* aiming assist 0..3 */
+void cue_game_start_demo(int mode, int p1, int p2, int cloth, int frame,
+                         int ballset, int bo);   /* start a CPU-vs-CPU match */
+int  cue_game_demo_thinking(void);               /* 1 = clean capture start point */
 /* Debug: override the camera (eye + look target, fov) for inspection shots. */
 void cue_game_debug_cam(float ex, float ey, float ez,
                         float tx, float ty, float tz, float fov);

@@ -46,7 +46,7 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
              * size as UK pool, but snooker balls/rules and snooker spots scaled
              * onto the small bed. */
             t->reds = 6;
-            t->cloth = RGB565C(20, 100, 78);            /* snooker green */
+            t->cloth = RGB565C(4, 135, 21);            /* snooker green */
             t->spot = RGB565C(200, 200, 200);
             t->blue_x  = 0.0f;                          /* centre spot */
             t->pink_x  = t->half_len * 0.5f;            /* between centre and top */
@@ -117,7 +117,7 @@ void cue_table_init(CueTable *t, CueGameKind kind) {
         t->blue_x = 0.0f;
         t->pink_x = t->half_len * 0.5f;
         t->black_x = t->half_len - 0.324f * sc;
-        t->cloth = RGB565C(20, 100, 78);
+        t->cloth = RGB565C(4, 135, 21);
         t->rail = RGB565C(74, 44, 22); t->rail_top = RGB565C(104, 62, 30);
         t->spot = RGB565C(200, 200, 200);
         t->nballs = (t->reds == 10) ? 17 : 22;
