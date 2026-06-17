@@ -6,10 +6,10 @@
 
 ThumbyCue is a full cue-sports game running on the Thumby Color's RP2350
 (dual Cortex-M33 @ 280 MHz, 520 KB SRAM, 128×128 RGB565 screen). It packs a
-real impulse-based ball physics engine, a 3-D flat-shaded table renderer with
-sphere-impostor balls, a simulation-driven computer opponent with eight
-distinct personas, best-of match play, and a broadcast-style scoreboard — all
-in a ~130 KB image.
+real impulse-based ball physics engine, a 3-D flat-shaded table with round,
+smoothly-lit balls (see [Rendering](#rendering)), a simulation-driven computer
+opponent with eight distinct personas, best-of match play, and a broadcast-style
+scoreboard — all in a ~130 KB image.
 
 The renderer and dual-core rasteriser are vendored from
 [ThumbyElite](https://github.com/austinio7116/ThumbyElite); the physics, rules,
@@ -23,6 +23,7 @@ AI, and UI are ThumbyCue's own.
 |------|-------|-------|
 | **UK 8-Ball** | 7 ft, rounded pockets | Yellow/red or yellow/blue sets, two-shot carry |
 | **US 8-Ball** | 9 ft, mitred pockets | PRO numbered solids & stripes |
+| **Chinese 8-Ball** | 10 ft, tight rounded pockets | Solids & stripes, WPA rules |
 | **US 9-Ball** | 9 ft | Lowest-ball-first, the run shown on the side |
 | **Snooker 15** | 12 ft | Full snooker — 15 reds + 6 colours |
 | **Snooker 10** | 10 ft | Ten-red snooker |
@@ -73,6 +74,33 @@ strike an impossible shot.
 The cue itself is drawn as a tapered, shaded stick with an ivory ferrule and a
 blue tip; it rests at the chosen contact point and angles along the elevated
 cue so the visual matches the shot you're about to play.
+
+---
+
+## Rendering
+
+The table is a flat-shaded triangle mesh drawn by a depth-tested, dual-core
+rasteriser (both cores draw their half of the screen). The balls, though, are
+**sphere impostors** rather than 3-D meshes — a real sphere mesh is hundreds of
+triangles, and 22 of them at once would never fit the RP2350's frame budget.
+
+Instead each ball is drawn as a single screen-space **disc** and lit *per pixel*.
+For every pixel inside the disc the shader works out which point on the sphere's
+surface it maps to (the surface normal, from the pixel's offset within the disc),
+and from that:
+
+- shades it from the table light plus a white **specular** highlight, so it reads
+  as a rounded, glossy ball;
+- samples the ball's texture using its current 3-D **orientation**, so numbers,
+  stripes and the cue ball's spots rotate correctly as the ball rolls and spins;
+- writes a per-pixel **depth** so balls correctly occlude one another, the
+  cushions and the cue.
+
+The result looks like a fully-lit 3-D sphere with live english, for roughly the
+cost of filling a flat circle — which is what lets a full snooker rack render at
+frame rate on a 280 MHz core. (The technique is vendored, with the rasteriser,
+from [ThumbyElite](https://github.com/austinio7116/ThumbyElite), where it draws
+planets.)
 
 ---
 
